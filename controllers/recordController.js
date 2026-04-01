@@ -15,14 +15,21 @@ exports.getRecords = async (req, res) => {
   }
 };
 
-// Yeni Sipariş Ekle
+// Yeni Sipariş Ekle veya Mevcut Olanı Güncelle (UPSERT Mantığı)
 exports.createRecord = async (req, res) => {
   try {
-    const newRecord = new Record(req.body); 
-    const savedRecord = await newRecord.save(); 
-    res.status(201).json(savedRecord); 
+    const { date, profile, foods } = req.body;
+    
+    // Aynı tarih ve aynı profil için var olanı bul ve güncelle, yoksa yeni oluştur
+    const updatedRecord = await Record.findOneAndUpdate(
+      { date, profile }, // Arama kriteri
+      { foods },        // Güncellenecek veri
+      { new: true, upsert: true, runValidators: true } // Upsert: Yoksa oluştur
+    );
+
+    res.status(201).json(updatedRecord); 
   } catch (error) {
-    res.status(400).json({ message: "Sipariş kurallara uymuyor!", error });
+    res.status(400).json({ message: "Sipariş işlenirken hata oluştu!", error });
   }
 };
 
