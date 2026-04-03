@@ -1,35 +1,35 @@
 // controllers/recordController.js
 const Record = require("../models/Record");
 
-// Siparişleri Getir
+// Siparişleri Getir (Geçmiş dökümü)
 exports.getRecords = async (req, res) => {
   try {
     const filter = {};
     if (req.query.date) filter.date = req.query.date;
     if (req.query.profile) filter.profile = req.query.profile;
 
-    const records = await Record.find(filter); 
-    res.json(records);
+    const orders = await Record.find(filter); 
+    res.json(orders);
   } catch (error) {
-    res.status(500).json({ message: "Siparişler çekilirken hata oluştu", error });
+    res.status(500).json({ message: "Error fetching records", error: error.message });
   }
 };
 
-// Yeni Sipariş Ekle veya Mevcut Olanı Güncelle (UPSERT Mantığı)
+// Sipariş Oluştur veya Güncelle (UPSERT Mantığı)
 exports.createRecord = async (req, res) => {
   try {
-    const { date, profile, foods } = req.body;
+    const { date, profile, items } = req.body;
     
-    // Aynı tarih ve aynı profil için var olanı bul ve güncelle, yoksa yeni oluştur
+    // Aynı tarihte aynı profile kayıt varsa güncelle, yoksa yeni oluştur
     const updatedRecord = await Record.findOneAndUpdate(
       { date, profile }, // Arama kriteri
-      { foods },        // Güncellenecek veri
-      { new: true, upsert: true, runValidators: true } // Upsert: Yoksa oluştur
+      { items },        // Güncelleme verisi
+      { new: true, upsert: true, runValidators: true } 
     );
 
     res.status(201).json(updatedRecord); 
   } catch (error) {
-    res.status(400).json({ message: "Sipariş işlenirken hata oluştu!", error });
+    res.status(400).json({ message: "Error processing the order!", error: error.message });
   }
 };
 
@@ -37,8 +37,8 @@ exports.createRecord = async (req, res) => {
 exports.deleteRecord = async (req, res) => {
   try {
     const deletedRecord = await Record.findByIdAndDelete(req.params.id);
-    res.json({ message: "Sipariş başarıyla silindi", deletedRecord });
+    res.json({ message: "Order deleted successfully", deletedRecord });
   } catch (error) {
-    res.status(500).json({ message: "Silme işlemi başarısız", error });
+    res.status(500).json({ message: "Deletion failed", error: error.message });
   }
 };

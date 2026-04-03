@@ -13,10 +13,12 @@ app.use(express.json());
 const recordsRoute = require("./routes/records");
 const menusRoute = require("./routes/menus");
 const foodsRoute = require("./routes/foods");
+const usersRoute = require("./routes/users");
 
 app.use("/records", recordsRoute); 
 app.use("/menus", menusRoute);     
 app.use("/allFoods", foodsRoute);
+app.use("/users", usersRoute);
 // --------------------------------------
 
 // --- VERİTABANI BAĞLANTISI ---

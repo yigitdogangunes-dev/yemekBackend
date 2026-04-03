@@ -1,80 +1,96 @@
-// seed.js - Tek seferlik çalıştırılacak veri göçü scripti
+// seed.js - Veritabanı taşıma scripti
 // Kullanım: node seed.js
 
 const mongoose = require("mongoose");
 const dotenv = require("dotenv");
 const Food = require("./models/Food");
+const Menu = require("./models/Menu");
+const Record = require("./models/Record");
+const User = require("./models/User");
 
 dotenv.config();
 
 const allFoods = [
   // ÇORBALAR
-  { isim: "Mercimek Çorbası", image: "/assets/mercimek.jpg", fiyat: 70, kategori: "corba" },
-  { isim: "Ezogelin Çorbası", image: "/assets/ezogelin.jpg", fiyat: 80, kategori: "corba" },
-  { isim: "Tavuk Suyu Çorbası", image: "/assets/tavuk-suyu.jpeg", fiyat: 95, kategori: "corba" },
+  { name: "Mercimek Çorbası", image: "/assets/mercimek.jpg", price: 70, category: "soup" },
+  { name: "Ezogelin Çorbası", image: "/assets/ezogelin.jpg", price: 80, category: "soup" },
+  { name: "Tavuk Suyu Çorbası", image: "/assets/tavuk-suyu.jpeg", price: 95, category: "soup" },
 
   // ANA YEMEKLER
-  { isim: "Fırın Tavuk", image: "/assets/firintavuk.jpg", fiyat: 230, kategori: "anaYemek" },
-  { isim: "Kuru Fasulye", image: "/assets/kurufasulye.jpg", fiyat: 170, kategori: "anaYemek" },
-  { isim: "Salçalı Köfte", image: "/assets/salcalikofte.jpg", fiyat: 250, kategori: "anaYemek" },
-  { isim: "Patlıcan Musakka", image: "/assets/patlicanmusakka.jpg", fiyat: 260, kategori: "anaYemek" },
-  { isim: "Çıtır Tavuk", image: "/assets/citirtavuk.jpg", fiyat: 240, kategori: "anaYemek" },
-  { isim: "Hasanpaşa Köfte", image: "/assets/hasanpasa.jpg", fiyat: 270, kategori: "anaYemek" },
-  { isim: "Terbiyeli Köfte", image: "/assets/terbiyelikofte.jpg", fiyat: 220, kategori: "anaYemek" },
-  { isim: "Kıymalı Çökertme Kebabı", image: "/assets/kıymalıcokertme.jpg", fiyat: 250, kategori: "anaYemek" },
-  { isim: "Sebzeli Kıymalı Patlıcan Yemeği", image: "/assets/sebzelikiymalipatlican.jpg", fiyat: 230, kategori: "anaYemek" },
-  { isim: "Nohut", image: "/assets/nohut.jpg", fiyat: 180, kategori: "anaYemek" },
-  { isim: "Sebzeli Tavuk", image: "/assets/sebzelitavuk.jpg", fiyat: 220, kategori: "anaYemek" },
-  { isim: "Beşamel Soslu Kıymalı Patates", image: "/assets/besamelsoslukiymali.jpg", fiyat: 240, kategori: "anaYemek" },
-  { isim: "Beşamel Soslu Tavuk", image: "/assets/besamelsoslutavuk.jpg", fiyat: 210, kategori: "anaYemek" },
-  { isim: "Karnıyarık", image: "/assets/karnıyarık.jpg", fiyat: 250, kategori: "anaYemek" },
-  { isim: "Kıymalı Ekmek Kebabı", image: "/assets/kıymalıekmekkebabı.jpg", fiyat: 240, kategori: "anaYemek" },
-  { isim: "Patates Oturtma", image: "/assets/patatesoturtma.jpg", fiyat: 220, kategori: "anaYemek" },
-  { isim: "Tavuk Tandık", image: "/assets/tavuktandır.jpg", fiyat: 260, kategori: "anaYemek" },
+  { name: "Fırın Tavuk", image: "/assets/firintavuk.jpg", price: 230, category: "mainCourse" },
+  { name: "Kuru Fasulye", image: "/assets/kurufasulye.jpg", price: 170, category: "mainCourse" },
+  { name: "Salçalı Köfte", image: "/assets/salcalikofte.jpg", price: 250, category: "mainCourse" },
+  { name: "Patlıcan Musakka", image: "/assets/patlicanmusakka.jpg", price: 260, category: "mainCourse" },
+  { name: "Çıtır Tavuk", image: "/assets/citirtavuk.jpg", price: 240, category: "mainCourse" },
+  { name: "Hasanpaşa Köfte", image: "/assets/hasanpasa.jpg", price: 270, category: "mainCourse" },
+  { name: "Terbiyeli Köfte", image: "/assets/terbiyelikofte.jpg", price: 220, category: "mainCourse" },
+  { name: "Kıymalı Çökertme Kebabı", image: "/assets/kıymalıcokertme.jpg", price: 250, category: "mainCourse" },
+  { name: "Sebzeli Kıymalı Patlıcan Yemeği", image: "/assets/sebzelikiymalipatlican.jpg", price: 230, category: "mainCourse" },
+  { name: "Nohut", image: "/assets/nohut.jpg", price: 180, category: "mainCourse" },
+  { name: "Sebzeli Tavuk", image: "/assets/sebzelitavuk.jpg", price: 220, category: "mainCourse" },
+  { name: "Beşamel Soslu Kıymalı Patates", image: "/assets/besamelsoslukiymali.jpg", price: 240, category: "mainCourse" },
+  { name: "Beşamel Soslu Tavuk", image: "/assets/besamelsoslutavuk.jpg", price: 210, category: "mainCourse" },
+  { name: "Karnıyarık", image: "/assets/karnıyarık.jpg", price: 250, category: "mainCourse" },
+  { name: "Kıymalı Ekmek Kebabı", image: "/assets/kıymalıekmekkebabı.jpg", price: 240, category: "mainCourse" },
+  { name: "Patates Oturtma", image: "/assets/patatesoturtma.jpg", price: 220, category: "mainCourse" },
+  { name: "Tavuk Tandık", image: "/assets/tavuktandır.jpg", price: 260, category: "mainCourse" },
 
   // EŞLİKÇİLER
-  { isim: "Pirinç Pilavı", image: "/assets/pirincpilavi.jpg", fiyat: 110, kategori: "eslikci" },
-  { isim: "Soslu Mantı", image: "/assets/soslumanti.jpg", fiyat: 150, kategori: "eslikci" },
-  { isim: "Bulgur Pilavı", image: "/assets/bulgurpilavi.jpg", fiyat: 100, kategori: "eslikci" },
-  { isim: "Soslu Spagetti", image: "/assets/sosluspagetti.jpg", fiyat: 130, kategori: "eslikci" },
-  { isim: "Soslu Makarna", image: "/assets/soslumakarna.jpg", fiyat: 120, kategori: "eslikci" },
+  { name: "Pirinç Pilavı", image: "/assets/pirincpilavi.jpg", price: 110, category: "side" },
+  { name: "Soslu Mantı", image: "/assets/soslumanti.jpg", price: 150, category: "side" },
+  { name: "Bulgur Pilavı", image: "/assets/bulgurpilavi.jpg", price: 100, category: "side" },
+  { name: "Soslu Spagetti", image: "/assets/sosluspagetti.jpg", price: 130, category: "side" },
+  { name: "Soslu Makarna", image: "/assets/soslumakarna.jpg", price: 120, category: "side" },
 
-  // SOĞUKLAR
-  { isim: "Çoban Salata", image: "/assets/coban-salata.jpg", fiyat: 60, kategori: "soguk" },
-  { isim: "Mevsim Salata", image: "/assets/mevsim-salata.jpg", fiyat: 50, kategori: "soguk" },
-  { isim: "Yoğurt", image: "/assets/yogurt.jpg", fiyat: 50, kategori: "soguk" },
-  { isim: "Cacık", image: "/assets/cacık.jpg", fiyat: 80, kategori: "soguk" },
+  // SOĞUKLAR / MEZELER
+  { name: "Çoban Salata", image: "/assets/coban-salata.jpg", price: 60, category: "cold" },
+  { name: "Mevsim Salata", image: "/assets/mevsim-salata.jpg", price: 50, category: "cold" },
+  { name: "Yoğurt", image: "/assets/yogurt.jpg", price: 50, category: "cold" },
+  { name: "Cacık", image: "/assets/cacık.jpg", price: 80, category: "cold" },
 
   // TATLILAR
-  { isim: "Tiramisu", image: "/assets/tiramisu.jpg", fiyat: 140, kategori: "tatli" },
-  { isim: "Kemalpaşa Tatlısı", image: "/assets/kemalpasa.jpg", fiyat: 120, kategori: "tatli" },
-  { isim: "Süt Helvası", image: "/assets/suthelvasi.jpg", fiyat: 150, kategori: "tatli" },
-  { isim: "Çikolata Soslu Etimek", image: "/assets/cikolatasosluetimek.jpg", fiyat: 100, kategori: "tatli" },
-  { isim: "İrmik Helvası", image: "/assets/irmikhelvasi.jpg", fiyat: 110, kategori: "tatli" },
-  { isim: "Bisküvili Pasta", image: "/assets/biskuvipasta.jpg", fiyat: 100, kategori: "tatli" },
-  { isim: "Portakallı Revani", image: "/assets/portakallirevani.jpg", fiyat: 120, kategori: "tatli" },
-  { isim: "Yer Fıstıklı Çıtır Muhallebi", image: "/assets/fistiklimuhallebi.jpg", fiyat: 140, kategori: "tatli" },
-  { isim: "Supangle", image: "/assets/supangle.jpg", fiyat: 130, kategori: "tatli" },
+  { name: "Tiramisu", image: "/assets/tiramisu.jpg", price: 140, category: "dessert" },
+  { name: "Kemalpaşa Tatlısı", image: "/assets/kemalpasa.jpg", price: 120, category: "dessert" },
+  { name: "Süt Helvası", image: "/assets/suthelvasi.jpg", price: 150, category: "dessert" },
+  { name: "Çikolata Soslu Etimek", image: "/assets/cikolatasosluetimek.jpg", price: 100, category: "dessert" },
+  { name: "İrmik Helvası", image: "/assets/irmikhelvasi.jpg", price: 110, category: "dessert" },
+  { name: "Bisküvili Pasta", image: "/assets/biskuvipasta.jpg", price: 100, category: "dessert" },
+  { name: "Portakallı Revani", image: "/assets/portakallirevani.jpg", price: 120, category: "dessert" },
+  { name: "Yer Fıstıklı Çıtır Muhallebi", image: "/assets/fistiklimuhallebi.jpg", price: 140, category: "dessert" },
+  { name: "Supangle", image: "/assets/supangle.jpg", price: 130, category: "dessert" },
+];
+
+const allUsers = [
+  { firstName: "Yiğit", image: "/assets/avatar.jpg" },
+  { firstName: "Lamine", image: "/assets/avatar.jpg" },
+  { firstName: "Mert", image: "/assets/avatar.jpg" },
+  { firstName: "Enes", image: "/assets/avatar.jpg" },
+  { firstName: "Deneme1", image: "/assets/avatar.jpg" },
+  { firstName: "Deneme 2", image: "/assets/avatar.jpg" },
 ];
 
 const seedDB = async () => {
   try {
     await mongoose.connect(process.env.MONGO_URI);
-    console.log("✅ MongoDB'ye bağlandı.");
+    console.log("✅ Database connection established.");
 
-    // Önce eski verileri temizle
+    // Şema uyumsuzluğunu önlemek için koleksiyonlardaki eski verileri temizle
     await Food.deleteMany({});
-    console.log("🗑️  Eski yemek verileri silindi.");
+    await User.deleteMany({});
+    console.log("🗑️  Old data (food, user) deleted.");
 
-    // Yeni verileri yükle
+    // Yeni verileri ekle
     await Food.insertMany(allFoods);
-    console.log(`🍽️  ${allFoods.length} yemek başarıyla MongoDB Atlas'a yüklendi!`);
+    await User.insertMany(allUsers);
+
+    console.log(`🍽️  ${allFoods.length} foods successfully migrated!`);
+    console.log(`👤 ${allUsers.length} users successfully migrated!`);
 
     await mongoose.disconnect();
-    console.log("🔌 Bağlantı kapatıldı. İşlem tamamlandı.");
+    console.log("🔌 Connection closed. Migration complete.");
     process.exit(0);
   } catch (error) {
-    console.error("❌ Seed hatası:", error.message);
+    console.error("❌ Seed error:", error.message);
     process.exit(1);
   }
 };

@@ -1,17 +1,17 @@
 // models/Record.js
 const mongoose = require("mongoose");
 
-// Sipariş kuralımızı (Şablonumuzu) oluşturuyoruz
+// Our Order Record Schema
 const recordSchema = new mongoose.Schema({
   date: { 
     type: String, 
-    required: true // Bu zorunlu demek, tarih olmadan sipariş kaydedilemez!
+    required: true // Date is mandatory
   },
   profile: { 
     type: String, 
-    required: true // Siparişi kimin verdiği zorunlu
+    required: true // Profile name is mandatory
   },
-  foods: [
+  items: [
     {
       name: String,
       price: Number,
@@ -19,7 +19,6 @@ const recordSchema = new mongoose.Schema({
       category: String
     }
   ]
-}, { timestamps: true }); // Ne zaman eklendiğini otomatik kaydeder (createdAt)
+}, { timestamps: true }); // Automatically records createdAt and updatedAt
 
-// Şablonu dışarı aktarıyoruz
 module.exports = mongoose.model("Record", recordSchema);

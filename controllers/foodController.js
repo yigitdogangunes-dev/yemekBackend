@@ -3,23 +3,23 @@ const Food = require("../models/Food");
 
 exports.getAllFoods = async (req, res) => {
   try {
-    // Veritabanındaki tüm yemekleri çek
-    const foods = await Food.find({});
+    // Sadece aktif olan yemekleri veritabanından çek
+    const foods = await Food.find({ status: "active" });
     
-    // Frontend'in beklediği formatta (kategorilere ayrılmış şekilde) grupla
-    const groupedFoods = {
-      corba: foods.filter(f => f.kategori === "corba"),
-      anaYemek: foods.filter(f => f.kategori === "anaYemek"),
-      eslikci: foods.filter(f => f.kategori === "eslikci"),
-      soguk: foods.filter(f => f.kategori === "soguk"),
-      tatli: foods.filter(f => f.kategori === "tatli")
+    // Ön yüzün beklediği kategorilere göre grupla (İngilizce anahtarlar kullanılıyor)
+    const categorizedFoods = {
+      soup: foods.filter(f => f.category === "soup"),
+      mainCourse: foods.filter(f => f.category === "mainCourse"),
+      side: foods.filter(f => f.category === "side"),
+      cold: foods.filter(f => f.category === "cold"),
+      dessert: foods.filter(f => f.category === "dessert")
     };
     
-    res.json(groupedFoods);
+    res.json(categorizedFoods);
   } catch (error) {
-    console.error("Yemekler çekilirken hata:", error);
+    console.error("Error fetching foods:", error);
     res.status(500).json({ 
-      message: "Yemek listesi veritabanından alınamadı", 
+      message: "Food list could not be retrieved from the database", 
       error: error.message 
     });
   }
