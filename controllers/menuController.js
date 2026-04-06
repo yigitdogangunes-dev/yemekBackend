@@ -4,8 +4,13 @@ const Menu = require("../models/Menu");
 // Günlük menüyü çek (tarihe göre filtreleme opsiyonel)
 exports.getMenus = async (req, res) => {
   try {
-    const filter = req.query.date ? { date: req.query.date, status: "active" } : { status: "active" }; 
-    const menus = await Menu.find(filter);
+    const filter = req.query.date ? { date: req.query.date, status: "active" } : { status: "active" };
+    const menus = await Menu.find(filter)
+      .populate("soup")
+      .populate("mainCourse")
+      .populate("side")
+      .populate("cold")
+      .populate("dessert");
     res.json(menus);
   } catch (error) {
     res.status(500).json({ message: "Menu not found", error: error.message });

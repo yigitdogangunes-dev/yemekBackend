@@ -74,10 +74,14 @@ const seedDB = async () => {
     await mongoose.connect(process.env.MONGO_URI);
     console.log("✅ Database connection established.");
 
-    // Şema uyumsuzluğunu önlemek için koleksiyonlardaki eski verileri temizle
-    await Food.deleteMany({});
-    await User.deleteMany({});
-    console.log("🗑️  Old data (food, user) deleted.");
+    // Şema uyumsuzluğunu ve bozuk referansları önlemek için tüm koleksiyonları temizle
+    await Promise.all([
+      Food.deleteMany({}),
+      User.deleteMany({}),
+      Menu.deleteMany({}),
+      Record.deleteMany({})
+    ]);
+    console.log("🗑️  All old data (food, user, menu, record) deleted.");
 
     // Yeni verileri ekle
     await Food.insertMany(allFoods);

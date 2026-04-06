@@ -3,20 +3,32 @@ const mongoose = require("mongoose");
 
 // Our Order Record Schema
 const recordSchema = new mongoose.Schema({
-  date: { 
-    type: String, 
+  date: {
+    type: String,
     required: true // Date is mandatory
   },
-  profile: { 
-    type: String, 
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
     required: true // Profile name is mandatory
   },
   items: [
     {
-      name: String,
-      price: Number,
-      portion: Number,
-      category: String
+      food: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Food",
+        required: true
+      },
+      portion: {
+        type: Number,
+        required: true,
+        default: 1
+      },
+      price: {
+        type: Number,
+        required: true
+      },
+
     }
   ]
 }, { timestamps: true }); // Automatically records createdAt and updatedAt

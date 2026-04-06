@@ -6,9 +6,11 @@ exports.getRecords = async (req, res) => {
   try {
     const filter = {};
     if (req.query.date) filter.date = req.query.date;
-    if (req.query.profile) filter.profile = req.query.profile;
+    if (req.query.user) filter.user = req.query.user;
 
-    const orders = await Record.find(filter); 
+    const orders = await Record.find(filter)
+      .populate("user")
+      .populate("items.food");
     res.json(orders);
   } catch (error) {
     res.status(500).json({ message: "Error fetching records", error: error.message });
@@ -18,16 +20,16 @@ exports.getRecords = async (req, res) => {
 // Sipariş Oluştur veya Güncelle (UPSERT Mantığı)
 exports.createRecord = async (req, res) => {
   try {
-    const { date, profile, items } = req.body;
-    
-    // Aynı tarihte aynı profile kayıt varsa güncelle, yoksa yeni oluştur
+    const { date, user, items } = req.body;
+
+    // Aynı tarihte aynı user kayıt varsa güncelle, yoksa yeni oluştur
     const updatedRecord = await Record.findOneAndUpdate(
-      { date, profile }, // Arama kriteri
+      { date, user }, // Arama kriteri
       { items },        // Güncelleme verisi
-      { new: true, upsert: true, runValidators: true } 
+      { new: true, upsert: true, runValidators: true }
     );
 
-    res.status(201).json(updatedRecord); 
+    res.status(201).json(updatedRecord);
   } catch (error) {
     res.status(400).json({ message: "Error processing the order!", error: error.message });
   }
