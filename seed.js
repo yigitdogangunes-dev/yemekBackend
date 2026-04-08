@@ -61,12 +61,12 @@ const allFoods = [
 ];
 
 const allUsers = [
-  { firstName: "Yiğit", image: "/assets/avatar.jpg" },
-  { firstName: "Lamine", image: "/assets/avatar.jpg" },
-  { firstName: "Mert", image: "/assets/avatar.jpg" },
-  { firstName: "Enes", image: "/assets/avatar.jpg" },
-  { firstName: "Deneme1", image: "/assets/avatar.jpg" },
-  { firstName: "Deneme 2", image: "/assets/avatar.jpg" },
+  { firstName: "Yiğit", image: "/assets/avatar.jpg", role: "admin" },
+  { firstName: "Lamine", image: "/assets/avatar.jpg", role: "employee" },
+  { firstName: "Mert", image: "/assets/avatar.jpg", role: "employee" },
+  { firstName: "Enes", image: "/assets/avatar.jpg", role: "employee" },
+  { firstName: "Deneme1", image: "/assets/avatar.jpg", role: "employee" },
+  { firstName: "Deneme 2", image: "/assets/avatar.jpg", role: "employee" },
 ];
 
 const seedDB = async () => {
