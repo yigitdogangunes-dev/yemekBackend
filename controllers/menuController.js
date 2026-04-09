@@ -22,8 +22,14 @@ exports.createMenu = async (req, res) => {
   try {
     const newMenu = new Menu(req.body);
     const savedMenu = await newMenu.save();
-    res.status(201).json(savedMenu);
+
+    // Kaydettikten sonra populate ederek geri dönüyoruz ki frontend patlamasın
+    const populatedMenu = await Menu.findById(savedMenu._id)
+      .populate("soup mainCourse side cold dessert");
+
+    res.status(201).json(populatedMenu);
   } catch (error) {
+    console.error("Menü kaydedilemedi:", error);
     res.status(400).json({ message: "Menu could not be saved", error: error.message });
   }
 };

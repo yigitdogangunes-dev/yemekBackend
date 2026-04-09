@@ -6,11 +6,19 @@ exports.getRecords = async (req, res) => {
   try {
     const filter = {};
     if (req.query.date) filter.date = req.query.date;
-    if (req.query.user) filter.user = req.query.user;
+
+    if (req.user.role === "admin") {
+      // Admin: isteğe bağlı user filtresiyle herkesi görebilir
+      if (req.query.user) filter.user = req.query.user;
+    } else {
+      // Çalışan: sadece kendi kayıtlarını görebilir (query'deki user parametresi görmezden gelinir)
+      filter.user = req.user.id;
+    }
 
     const orders = await Record.find(filter)
-      .populate("user")
-      .populate("items.food");
+      .select("-__v -updatedAt -createdAt -items._id")
+      .populate("user", "firstName lastName -_id")
+      .populate("items.food", "name -_id");
     res.json(orders);
   } catch (error) {
     res.status(500).json({ message: "Error fetching records", error: error.message });

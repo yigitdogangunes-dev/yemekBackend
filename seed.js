@@ -33,7 +33,7 @@ const allFoods = [
   { name: "Karnıyarık", image: "/assets/karnıyarık.jpg", price: 250, category: "mainCourse" },
   { name: "Kıymalı Ekmek Kebabı", image: "/assets/kıymalıekmekkebabı.jpg", price: 240, category: "mainCourse" },
   { name: "Patates Oturtma", image: "/assets/patatesoturtma.jpg", price: 220, category: "mainCourse" },
-  { name: "Tavuk Tandık", image: "/assets/tavuktandır.jpg", price: 260, category: "mainCourse" },
+  { name: "Tavuk Tandır", image: "/assets/tavuktandır.jpg", price: 260, category: "mainCourse" },
 
   // EŞLİKÇİLER
   { name: "Pirinç Pilavı", image: "/assets/pirincpilavi.jpg", price: 110, category: "side" },
@@ -60,13 +60,20 @@ const allFoods = [
   { name: "Supangle", image: "/assets/supangle.jpg", price: 130, category: "dessert" },
 ];
 
+const defaultPass = process.env.DEFAULT_PASSWORD;
+
+if (!defaultPass) {
+  console.error("❌ HATA: DEFAULT_PASSWORD environment değişkeni tanımlı değil!");
+  process.exit(1);
+}
+
 const allUsers = [
-  { firstName: "Yiğit", image: "/assets/avatar.jpg", role: "admin" },
-  { firstName: "Lamine", image: "/assets/avatar.jpg", role: "employee" },
-  { firstName: "Mert", image: "/assets/avatar.jpg", role: "employee" },
-  { firstName: "Enes", image: "/assets/avatar.jpg", role: "employee" },
-  { firstName: "Deneme1", image: "/assets/avatar.jpg", role: "employee" },
-  { firstName: "Deneme 2", image: "/assets/avatar.jpg", role: "employee" },
+  { firstName: "Yiğit", image: "/assets/avatar.jpg", role: "admin", password: defaultPass },
+  { firstName: "Lamine", image: "/assets/avatar.jpg", role: "employee", password: defaultPass },
+  { firstName: "Mert", image: "/assets/avatar.jpg", role: "employee", password: defaultPass },
+  { firstName: "Enes", image: "/assets/avatar.jpg", role: "employee", password: defaultPass },
+  { firstName: "Deneme1", image: "/assets/avatar.jpg", role: "employee", password: defaultPass },
+  { firstName: "Deneme 2", image: "/assets/avatar.jpg", role: "employee", password: defaultPass },
 ];
 
 const seedDB = async () => {
@@ -85,10 +92,15 @@ const seedDB = async () => {
 
     // Yeni verileri ekle
     await Food.insertMany(allFoods);
-    await User.insertMany(allUsers);
+
+    // DİKKAT: User için insertMany KULLANAMAYIZ!
+    // Çünkü insertMany, Mongoose'un "pre-save" (şifre hashleme) özelliğini TETİKLEMEZ.
+    // Şifreler veritabanına korumasız "dımdızlak" (plaintext) yazılır.
+    // Bu yüzden teker teker .create() ile oluşturup Hashlenmelerini sağlıyoruz.
+    await Promise.all(allUsers.map(user => User.create(user)));
 
     console.log(`🍽️  ${allFoods.length} foods successfully migrated!`);
-    console.log(`👤 ${allUsers.length} users successfully migrated!`);
+    console.log(`👤 ${allUsers.length} users successfully migrated (WITH secure hashed passwords)!`);
 
     await mongoose.disconnect();
     console.log("🔌 Connection closed. Migration complete.");

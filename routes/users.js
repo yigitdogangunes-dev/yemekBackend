@@ -2,11 +2,15 @@
 const express = require("express");
 const router = express.Router();
 const userController = require("../controllers/userController");
+const authMiddleware = require("../middleware/authMiddleware");
+
+// Kullanıcı işlemlerine güvenlik duvarı ekle
+router.use(authMiddleware);
 
 // Tüm kullanıcıları getir
 router.get("/", userController.getUsers);
 
-// Yeni kullanıcı oluştur
+// Yeni kullanıcı oluştur (Sadece yetkili/admin olmalı ama şimdilik genel koruma)
 router.post("/", userController.createUser);
 
 // Kullanıcı güncelle

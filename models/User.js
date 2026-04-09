@@ -1,5 +1,6 @@
 // models/User.js
 const mongoose = require("mongoose");
+const bcrypt = require("bcryptjs");
 
 const userSchema = new mongoose.Schema({
   firstName: {
@@ -15,6 +16,10 @@ const userSchema = new mongoose.Schema({
     required: false,
     default: ""
   },
+  password: {
+    type: String,
+    required: true
+  },
   status: {
     type: String,
     enum: ["active", "passive"],
@@ -27,23 +32,33 @@ const userSchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
-// --- AYNI İSİM KONTROLÜ  ---
-// Kayıt edilmeden hemen önce (pre-save) devreye girer
+// --- AYNI İSİM KONTROLÜ VE ŞİFRELEME ---
+// Kayıt edilmeden veya güncellenmeden hemen önce (pre-save) devreye girer
 userSchema.pre("save", async function () {
   const user = this;
 
-  // bu isimde başka biri var mı diye bakıyoruz
+  // 1. İsim çakışması kontrolü
   const UserModel = mongoose.model("User");
   const existingUser = await UserModel.findOne({
     firstName: user.firstName,
     _id: { $ne: user._id } // Kendisi hariç
   });
 
-  // Eğer aynı isimde biri varsa ve soyadı girilmemişse hata döndür
   if (existingUser && !user.lastName) {
     throw new Error("Sistemde aynı isimli başka bir kullanıcı var. Lütfen bu kişiyi ayırt etmek için bir soyadı girin.");
   }
+
+  // 2. Şifreleme (Eğer şifre alanı değiştirilmişse veya yeni kullanıcıysa)
+  if (user.isModified("password")) {
+    const salt = await bcrypt.genSalt(10); // Güvenlik tuzu oluştur
+    user.password = await bcrypt.hash(user.password, salt); // Şifreyi tuzla karıştırıp hash'le
+  }
 });
+
+// Şifre doğrulama fonksiyonu (Login olurken kullanılacak)
+userSchema.methods.comparePassword = async function (enteredPassword) {
+  return await bcrypt.compare(enteredPassword, this.password);
+};
 
 // Kolaylık olsun diye Ad Soyad birleştiren sanal bir alan
 userSchema.virtual("fullName").get(function () {
