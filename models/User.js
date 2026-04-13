@@ -11,6 +11,13 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: false,
   },
+  email: {
+    type: String,
+    required: [true, "E-posta alanı zorunludur"],
+    unique: true,
+    lowercase: true,
+    match: [/^\S+@\S+\.\S+$/, "Geçerli bir e-posta adresi girin"]
+  },
   image: {
     type: String,
     required: false,
@@ -29,6 +36,15 @@ const userSchema = new mongoose.Schema({
     type: String,
     enum: ["admin", "employee"],
     default: "employee"
+  },
+  // Şifre sıfırlama için geçici token alanları
+  resetPasswordToken: {
+    type: String,
+    default: null
+  },
+  resetPasswordExpires: {
+    type: Date,
+    default: null
   }
 }, { timestamps: true });
 

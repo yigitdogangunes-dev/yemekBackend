@@ -3,20 +3,23 @@ const express = require("express");
 const router = express.Router();
 const userController = require("../controllers/userController");
 const authMiddleware = require("../middleware/authMiddleware");
+const adminMiddleware = require("../middleware/adminMiddleware");
 
-// Kullanıcı işlemlerine güvenlik duvarı ekle
-router.use(authMiddleware);
+// Tüm kullanıcı işlemleri için:
+// 1. Kimlik doğrulaması (authMiddleware)
+// 2. Yönetici kontrolü (adminMiddleware)
+router.use(authMiddleware, adminMiddleware);
 
-// Tüm kullanıcıları getir
+// Tüm kullanıcıları getir (Admin)
 router.get("/", userController.getUsers);
 
-// Yeni kullanıcı oluştur (Sadece yetkili/admin olmalı ama şimdilik genel koruma)
+// Yeni kullanıcı oluştur (Admin)
 router.post("/", userController.createUser);
 
-// Kullanıcı güncelle
+// Kullanıcı güncelle (Admin)
 router.put("/:id", userController.updateUser);
 
-// Kullanıcı sil
+// Kullanıcı sil (Admin)
 router.delete("/:id", userController.deleteUser);
 
 module.exports = router;

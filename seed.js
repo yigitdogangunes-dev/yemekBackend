@@ -68,12 +68,14 @@ if (!defaultPass) {
 }
 
 const allUsers = [
-  { firstName: "Yiğit", image: "/assets/avatar.jpg", role: "admin", password: defaultPass },
-  { firstName: "Lamine", image: "/assets/avatar.jpg", role: "employee", password: defaultPass },
-  { firstName: "Mert", image: "/assets/avatar.jpg", role: "employee", password: defaultPass },
-  { firstName: "Enes", image: "/assets/avatar.jpg", role: "employee", password: defaultPass },
-  { firstName: "Deneme1", image: "/assets/avatar.jpg", role: "employee", password: defaultPass },
-  { firstName: "Deneme 2", image: "/assets/avatar.jpg", role: "employee", password: defaultPass },
+  { 
+    firstName: "Yiğit", 
+    lastName: "Doğan",
+    email: "admin@yemek.com", // Bu e-posta ile giriş yapılacak
+    image: "/assets/avatar.jpg", 
+    role: "admin", 
+    password: defaultPass 
+  }
 ];
 
 const seedDB = async () => {

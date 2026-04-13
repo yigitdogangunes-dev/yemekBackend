@@ -20,10 +20,10 @@ exports.createUser = async (req, res) => {
     const { firstName, lastName, image, password, role } = req.body;
     const newUser = new User({ firstName, lastName, image, password, role });
     const savedUser = await newUser.save();
-    
+
     const userObj = savedUser.toObject();
     delete userObj.password;
-    
+
     res.status(201).json(userObj);
   } catch (error) {
     console.error("Kullanıcı oluşturulurken hata:", error);
