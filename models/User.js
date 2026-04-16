@@ -34,7 +34,7 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ["admin", "employee"],
+    enum: ["admin", "employee", "accountant"],
     default: "employee"
   },
   // Şifre sıfırlama için geçici token alanları

@@ -6,17 +6,22 @@ const mongoose = require("mongoose");
 const cookieParser = require("cookie-parser");
 
 
+const { generalLimiter } = require("./middleware/limiter");
+
 dotenv.config();
 const app = express();
 
 // CORS Ayarları (Cookie taşıma izni = credentials: true)
 app.use(cors({
-  origin: ["http://localhost:3000", "http://127.0.0.1:3000"], 
+  origin: ["http://localhost:3000", "http://127.0.0.1:3000"],
   credentials: true
 }));
 
 app.use(express.json());
 app.use(cookieParser());
+
+// --- GENEL GÜVENLİK ---
+app.use("/api", generalLimiter); // Tüm API rotalarına genel hız sınırı uygular
 
 // --- YENİ EKLENEN ROTALAR (KAPILAR) ---
 const recordsRoute = require("./routes/records");
@@ -25,8 +30,8 @@ const foodsRoute = require("./routes/foods");
 const usersRoute = require("./routes/users");
 const authRoute = require("./routes/auth");
 
-app.use("/records", recordsRoute); 
-app.use("/menus", menusRoute);     
+app.use("/records", recordsRoute);
+app.use("/menus", menusRoute);
 app.use("/allFoods", foodsRoute);
 app.use("/users", usersRoute);
 app.use("/auth", authRoute); // Giriş (login) bilet gişesi

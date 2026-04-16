@@ -7,8 +7,8 @@ exports.getRecords = async (req, res) => {
     const filter = {};
     if (req.query.date) filter.date = req.query.date;
 
-    if (req.user.role === "admin") {
-      // Admin: isteğe bağlı user filtresiyle herkesi görebilir
+    if (req.user.role === "admin" || req.user.role === "accountant") {
+      // Admin ve Muhasebeci: isteğe bağlı user filtresiyle herkesi görebilir
       if (req.query.user) filter.user = req.query.user;
     } else {
       // Çalışan: sadece kendi kayıtlarını görebilir (query'deki user parametresi görmezden gelinir)
@@ -29,6 +29,10 @@ exports.getRecords = async (req, res) => {
 exports.createRecord = async (req, res) => {
   try {
     let { date, user, items } = req.body;
+
+    if (req.user.role === "accountant") {
+      return res.status(403).json({ message: "Muhasebeciler sipariş giremez!" });
+    }
 
     // GÜVENLİK: Eğer kullanıcı admin değilse, başkasının adına sipariş giremez.
     // user ID'sini zorla giriş yapan kullanıcının kendi ID'si yapıyoruz.
@@ -61,6 +65,10 @@ exports.deleteRecord = async (req, res) => {
     
     if (!record) {
       return res.status(404).json({ message: "Kayıt bulunamadı." });
+    }
+
+    if (req.user.role === "accountant") {
+      return res.status(403).json({ message: "Muhasebeciler kayıt silemez!" });
     }
 
     // GÜVENLİK: Sadece admin veya kaydın sahibi silebilir
