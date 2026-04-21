@@ -25,7 +25,7 @@ const userSchema = new mongoose.Schema({
   },
   password: {
     type: String,
-    required: true
+    required: false
   },
   status: {
     type: String,
@@ -37,12 +37,12 @@ const userSchema = new mongoose.Schema({
     enum: ["admin", "employee", "accountant"],
     default: "employee"
   },
-  // Şifre sıfırlama için geçici token alanları
-  resetPasswordToken: {
+  // Şifresiz giriş (Magic Link) için token alanları
+  loginToken: {
     type: String,
     default: null
   },
-  resetPasswordExpires: {
+  loginTokenExpires: {
     type: Date,
     default: null
   }
@@ -71,8 +71,9 @@ userSchema.pre("save", async function () {
   }
 });
 
-// Şifre doğrulama fonksiyonu (Login olurken kullanılacak)
+// Şifre doğrulama fonksiyonu (Eski sistem hesaplar için geriye dönük uyumluluk, ama artık kullanılmayacak)
 userSchema.methods.comparePassword = async function (enteredPassword) {
+  if (!this.password) return false;
   return await bcrypt.compare(enteredPassword, this.password);
 };
 

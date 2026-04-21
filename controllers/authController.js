@@ -19,31 +19,92 @@ const createTransporter = () => {
   });
 };
 
-// --- GİRİŞ ---
+// --- GİRİŞ LİNKİ GÖNDER (MAGIC LINK) ---
 exports.login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email } = req.body;
 
-    // NoSQL Injection koruması: email ve password mutlaka string olmalı
-    if (typeof email !== "string" || typeof password !== "string") {
-      return res.status(400).json({ message: "Geçersiz giriş bilgileri." });
+    if (typeof email !== "string" || !email) {
+      return res.status(400).json({ message: "Lütfen e-posta adresinizi girin." });
     }
 
-    if (!email || !password) {
-      return res.status(400).json({ message: "Lütfen e-posta adresinizi ve şifrenizi girin." });
-    }
-
-    // E-posta ile kullanıcı ara (sadece aktif kullanıcılar)
     const user = await User.findOne({ email: email.toLowerCase().trim(), status: "active" });
 
+    // Güvenlik gereği, kullanıcı yoksa bile aynı mesajı dön
     if (!user) {
-      return res.status(401).json({ message: "Hatalı e-posta veya şifre." });
+      return res.json({ message: "Giriş bağlantısı e-posta adresinize gönderildi." });
     }
 
-    const isMatch = await user.comparePassword(password);
-    if (!isMatch) {
-      return res.status(401).json({ message: "Hatalı e-posta veya şifre." });
+    // 15 dakikalık giriş tokenı oluştur
+    const loginToken = crypto.randomBytes(32).toString("hex");
+    user.loginToken = crypto.createHash("sha256").update(loginToken).digest("hex");
+    user.loginTokenExpires = Date.now() + 15 * 60 * 1000; // 15 dakika
+    await user.save({ validateBeforeSave: false });
+
+    // Giriş linki
+    const loginUrl = `${process.env.FRONTEND_URL}/verify-login/${loginToken}`;
+
+    // E-posta gönder
+    try {
+      const transporter = createTransporter();
+      await transporter.sendMail({
+        from: `"Kodpilot Yemek" <no-reply@kodpilot.com>`,
+        to: user.email,
+        subject: "Sisteme Giriş Bağlantınız",
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; color: #333;">
+            <h2 style="color: #7c3aed;">Merhaba ${user.firstName},</h2>
+            <p>Sisteme giriş yapmak için aşağıdaki butona tıklayabilirsiniz:</p>
+            <div style="text-align: center; margin: 30px 0;">
+              <a href="${loginUrl}" style="display:inline-block; background:#7c3aed; color:white; padding:14px 28px; border-radius:8px; text-decoration:none; font-weight: bold; font-size: 16px;">
+                Giriş Yap
+              </a>
+            </div>
+            <p style="color:#666; font-size:14px;">Bu link <strong>15 dakika</strong> boyunca geçerlidir. Eğer bu talebi siz yapmadıysanız lütfen dikkate almayın.</p>
+          </div>
+        `
+      });
+    } catch (emailError) {
+      user.loginToken = null;
+      user.loginTokenExpires = null;
+      await user.save({ validateBeforeSave: false });
+      console.error("Giriş maili gönderme hatası:", emailError);
+      return res.status(500).json({ message: "E-posta gönderilemedi. Lütfen tekrar deneyin." });
     }
+
+    res.json({ message: "Giriş bağlantısı e-posta adresinize gönderildi." });
+
+  } catch (error) {
+    console.error("Magic Link (Login) Hatası:", error);
+    res.status(500).json({ message: "Kayıt işlemi sırasında sunucu hatası oluştu.", error: error.message });
+  }
+};
+
+// --- GİRİŞİ DOĞRULA (VERIFY MAGIC LINK) ---
+exports.verifyLogin = async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    if (!token) {
+      return res.status(400).json({ message: "Geçersiz giriş bağlantısı." });
+    }
+
+    // Token'ı hash'leyip veritabanında ara
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+    const user = await User.findOne({
+      loginToken: hashedToken,
+      loginTokenExpires: { $gt: Date.now() }, // Süresi dolmamış mı?
+      status: "active"
+    });
+
+    if (!user) {
+      return res.status(400).json({ message: "Bağlantının süresi dolmuş veya geçersiz. Lütfen tekrar giriş yapın." });
+    }
+
+    // Doğrulama başarılı, Token'ı temizle
+    user.loginToken = null;
+    user.loginTokenExpires = null;
+    await user.save({ validateBeforeSave: false });
 
     // JWT oluştur
     const bilet = jwt.sign(
@@ -73,26 +134,22 @@ exports.login = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Giriş (Login) Hatası:", error);
-    res.status(500).json({ message: "Giriş sırasında sunucu hatası oluştu.", error: error.message });
+    console.error("Doğrulama (Verify) Hatası:", error);
+    res.status(500).json({ message: "Doğrulama sırasında sunucu hatası oluştu." });
   }
 };
 
 // --- KAYIT (REGISTER) ---
 exports.register = async (req, res) => {
   try {
-    const { firstName, lastName, email, password } = req.body;
+    const { firstName, lastName, email } = req.body;
 
-    if (typeof email !== "string" || typeof password !== "string" || typeof firstName !== "string") {
+    if (typeof email !== "string" || typeof firstName !== "string") {
       return res.status(400).json({ message: "Geçersiz kayıt bilgileri." });
     }
 
-    if (!firstName || !email || !password) {
-      return res.status(400).json({ message: "Ad, e-posta ve şifre zorunludur." });
-    }
-
-    if (password.length < 6) {
-      return res.status(400).json({ message: "Şifre en az 6 karakter olmalıdır." });
+    if (!firstName || !email) {
+      return res.status(400).json({ message: "Ad ve e-posta zorunludur." });
     }
 
     // E-posta zaten kayıtlı mı?
@@ -101,12 +158,11 @@ exports.register = async (req, res) => {
       return res.status(409).json({ message: "Bu e-posta adresi zaten kullanılıyor." });
     }
 
-    // Yeni kullanıcı oluştur (default role: employee)
+    // Yeni kullanıcı oluştur (default role: employee, şifresiz)
     const newUser = new User({
       firstName,
       lastName: lastName || "",
       email,
-      password,
       role: "employee" // Kayıt olan herkes varsayılan olarak çalışandır
     });
 
@@ -148,99 +204,4 @@ exports.me = async (req, res) => {
   }
 };
 
-// --- ŞİFREMİ UNUTTUM ---
-exports.forgotPassword = async (req, res) => {
-  try {
-    const { email } = req.body;
 
-    if (!email || typeof email !== "string") {
-      return res.status(400).json({ message: "E-posta adresi gereklidir." });
-    }
-
-    const user = await User.findOne({ email: email.toLowerCase().trim(), status: "active" });
-
-    // Güvenlik gereği: Kullanıcı var mı yok mu her zaman aynı mesajı dön
-    if (!user) {
-      return res.json({ message: "Eğer bu e-posta kayıtlıysa, sıfırlama bağlantısı gönderildi." });
-    }
-
-    // 1 saatlik sıfırlama token'ı oluştur
-    const resetToken = crypto.randomBytes(32).toString("hex");
-    user.resetPasswordToken = crypto.createHash("sha256").update(resetToken).digest("hex");
-    user.resetPasswordExpires = Date.now() + 60 * 60 * 1000; // 1 saat
-    await user.save({ validateBeforeSave: false });
-
-    // Sıfırlama linki
-    const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
-
-    // E-posta gönder
-    try {
-      const transporter = createTransporter();
-      console.log("SMTP Bilgileri:", process.env.SMTP_HOST, process.env.SMTP_PORT, process.env.SMTP_USER); // Sadece DEBUG için
-      await transporter.sendMail({
-        from: `"Kodpilot Yemek" <no-reply@kodpilot.com>`,
-        to: user.email,
-        subject: "Şifre Sıfırlama Talebi",
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
-            <h2>Şifre Sıfırlama</h2>
-            <p>Merhaba ${user.firstName},</p>
-            <p>Şifre sıfırlama talebinde bulundunuz. Aşağıdaki butona tıklayarak şifrenizi sıfırlayabilirsiniz.</p>
-            <a href="${resetUrl}" style="display:inline-block; background:#7c3aed; color:white; padding:12px 24px; border-radius:8px; text-decoration:none; margin:16px 0;">
-              Şifremi Sıfırla
-            </a>
-            <p style="color:#666; font-size:14px;">Bu link <strong>1 saat</strong> geçerlidir. Eğer bu talebi siz yapmadıysanız bu e-postayı yok sayabilirsiniz.</p>
-          </div>
-        `
-      });
-    } catch (emailError) {
-      // E-posta gönderilemezse token'ı temizle
-      user.resetPasswordToken = null;
-      user.resetPasswordExpires = null;
-      await user.save({ validateBeforeSave: false });
-      console.error("E-posta gönderme hatası:", emailError);
-      return res.status(500).json({ message: "E-posta gönderilemedi. Lütfen tekrar deneyin." });
-    }
-
-    res.json({ message: "Eğer bu e-posta kayıtlıysa, sıfırlama bağlantısı gönderildi." });
-
-  } catch (error) {
-    console.error("Şifre Sıfırlama Hatası:", error);
-    res.status(500).json({ message: "Sunucu hatası." });
-  }
-};
-
-// --- ŞİFRE SIFIRLA ---
-exports.resetPassword = async (req, res) => {
-  try {
-    const { token } = req.params;
-    const { password } = req.body;
-
-    if (!password || password.length < 6) {
-      return res.status(400).json({ message: "Şifre en az 6 karakter olmalıdır." });
-    }
-
-    // Token'ı hash'leyip veritabanında ara
-    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
-    const user = await User.findOne({
-      resetPasswordToken: hashedToken,
-      resetPasswordExpires: { $gt: Date.now() } // Süresi dolmamış mı?
-    });
-
-    if (!user) {
-      return res.status(400).json({ message: "Geçersiz veya süresi dolmuş sıfırlama bağlantısı." });
-    }
-
-    // Yeni şifreyi ata (pre-save kancası bcrypt ile hashleyecek)
-    user.password = password;
-    user.resetPasswordToken = null;
-    user.resetPasswordExpires = null;
-    await user.save();
-
-    res.json({ message: "Şifreniz başarıyla sıfırlandı. Şimdi giriş yapabilirsiniz." });
-
-  } catch (error) {
-    console.error("Şifre Sıfırlama Hatası:", error);
-    res.status(500).json({ message: "Sunucu hatası." });
-  }
-};
