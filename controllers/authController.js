@@ -107,14 +107,14 @@ exports.verifyLogin = async (req, res) => {
     await user.save({ validateBeforeSave: false });
 
     // JWT oluştur
-    const bilet = jwt.sign(
+    const ticket = jwt.sign(
       { id: user._id, role: user.role, firstName: user.firstName },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 
     // HttpOnly Cookie olarak gönder
-    res.cookie("jwt", bilet, {
+    res.cookie("jwt", ticket, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",

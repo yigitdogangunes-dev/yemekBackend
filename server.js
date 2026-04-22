@@ -29,12 +29,14 @@ const menusRoute = require("./routes/menus");
 const foodsRoute = require("./routes/foods");
 const usersRoute = require("./routes/users");
 const authRoute = require("./routes/auth");
+const whatsappRoute = require("./routes/whatsapp");
 
 app.use("/records", recordsRoute);
 app.use("/menus", menusRoute);
 app.use("/allFoods", foodsRoute);
 app.use("/users", usersRoute);
 app.use("/auth", authRoute); // Giriş (login) bilet gişesi
+app.use("/whatsapp", whatsappRoute);
 // --------------------------------------
 
 // --- VERİTABANI BAĞLANTISI ---
@@ -54,4 +56,8 @@ app.get("/", (req, res) => {
 const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => {
   console.log(`[Sunucu] Aşçı ocağı yaktı! ${PORT} portunda sipariş bekliyor...`);
+  
+  // WhatsApp servisini başlat
+  const { connectToWhatsApp } = require("./controllers/whatsappController");
+  connectToWhatsApp().catch(err => console.error("WhatsApp başlatma hatası:", err));
 });
