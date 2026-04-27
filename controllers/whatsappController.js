@@ -4,6 +4,8 @@ const pino = require("pino");
 const QRCode = require("qrcode");
 const path = require("path");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const Food = require("../models/Food");
+const Menu = require("../models/Menu");
 
 let sock;
 let qrCode = null;
@@ -80,45 +82,114 @@ async function connectToWhatsApp() {
 
         console.log(`📩 Mesaj Yakalandı! Gönderen: ${sender}, Tip: ${m.type}, Kendi Mesajım mı: ${isMe}`);
 
-        if (text) {
-            console.log(`💬 Mesaj İçeriği: ${text}`);
+        const targetGroup = process.env.WHATSAPP_TARGET_GROUP;
 
-            if (text) {
+        if (text && sender === targetGroup) {
+            console.log(`💬 Hedef Gruptan Mesaj Geldi: ${text}`);
+
+            try {
+                console.log("🤖 Gemini menüyü analiz ediyor...");
+
+                // Veritabanındaki mevcut yemek isimlerini çekelim (Gemini'ye kopya vermek için)
+                const existingFoods = await Food.find({}, "name");
+                const existingFoodNames = existingFoods.map(f => f.name).join(", ");
+
+                const prompt = `Sen bir yemek menüsü ayrıştırıcısısın. Aşağıdaki metni dikkatlice oku.
+                Eğer bu metin günlük olarak hazırlanan kapsamlı bir yemek menüsü listesi ise, yemekleri şu kategorilere ayırarak sadece JSON formatında yanıt ver:
+                - soup (Çorbalar)
+                - mainCourse (Ana Yemekler)
+                - side (Pilav, Makarna, Yardımcı Yemekler)
+                - cold (Salata, Cacık, Yoğurt, Soğuklar)
+                - dessert (Tatlılar)
+
+                ÇOK ÖNEMLİ KURAL: Veritabanımızda şu anda bulunan yemekler şunlardır: [${existingFoodNames}]
+                Lütfen metindeki yemekleri bu listedeki yemeklerle eşleştir. Örneğin metinde "Mercimek" yazıyorsa ve listede "Mercimek Çorbası" varsa, JSON içine kesinlikle "Mercimek Çorbası" olarak yaz. Birebir listedeki ismi kullanmaya çalış. Eğer listede hiç alakası olmayan yepyeni bir yemekse, o zaman kendi adını yazabilirsin.
+
+                ANCAK, eğer bu metin bir kişinin kısa siparişi, seçimi (örn: "Bana oradan pilav"), bir soru veya sohbet mesajıysa kesinlikle boş bir JSON '{}' döndür.
+                Sadece saf JSON döndür, kod blokları ( \`\`\` ) kullanma.
+
+                Metin: "${text}"`;
+
+                const result = await geminiModel.generateContent(prompt);
+                const responseText = result.response.text().trim();
+
                 try {
-                    console.log("🤖 Gemini menüyü ayrıştırıyor...");
+                    const cleanJson = responseText.replace(/```json|```/g, "").trim();
+                    const menuData = JSON.parse(cleanJson);
 
-                    const prompt = `Sen bir yemek menüsü ayrıştırıcısısın. Aşağıdaki metni oku ve yemekleri şu kategorilere ayırarak sadece JSON formatında yanıt ver:
-                    - soup (Çorbalar)
-                    - mainCourse (Ana Yemekler)
-                    - side (Pilav, Makarna, Yardımcı Yemekler)
-                    - cold (Salata, Cacık, Yoğurt, Soğuklar)
-                    - dessert (Tatlılar)
-
-                    Sadece saf JSON döndür, kod blokları ( \`\`\` ) kullanma.
-
-                    Metin: "${text}"`;
-
-                    const result = await geminiModel.generateContent(prompt);
-                    const responseText = result.response.text().trim();
-
-                    try {
-                        const cleanJson = responseText.replace(/```json|```/g, "").trim();
-                        const menuData = JSON.parse(cleanJson);
-
-                        console.log("✅ Gemini JSON Çıktısı:");
-                        console.log(JSON.stringify(menuData, null, 2));
-
-                    } catch (parseError) {
-                        console.log("🤖 Gemini Ham Cevabı:", responseText);
-                        console.error("❌ JSON Ayrıştırma Hatası:", parseError.message);
+                    if (Object.keys(menuData).length === 0) {
+                        console.log("⚠️ Bu mesaj bir menü değil (Sipariş veya sohbet olabilir). İşlem yapılmadı.");
+                        return;
                     }
-                } catch (error) {
-                    console.error("❌ Gemini hatası:", error);
+
+                    console.log("✅ Menü tespit edildi ve ayrıştırıldı:");
+                    console.log(JSON.stringify(menuData, null, 2));
+
+                    // --- VERİTABANI İŞLEMLERİ (FIND OR CREATE) ---
+                    const findOrCreateFoods = async (foodNames, category) => {
+                        const ids = [];
+                        if (!foodNames || !Array.isArray(foodNames)) return ids;
+                        for (const name of foodNames) {
+                            if (!name) continue;
+                            let food = await Food.findOne({ name: { $regex: new RegExp(`^${name.trim()}$`, "i") } });
+                            if (!food) {
+                                food = await Food.create({
+                                    name: name.trim(),
+                                    image: "https://via.placeholder.com/300x200?text=Yemek", // Varsayılan görsel
+                                    price: 50, // Varsayılan fiyat
+                                    category: category
+                                });
+                                console.log(`[Yeni Yemek Eklendi] -> ${name.trim()} (${category})`);
+                            }
+                            ids.push(food._id);
+                        }
+                        return ids;
+                    };
+
+                    // Gemini bazen anahtarları çoğul (mainCourses) veya farklı yazabiliyor. Hepsini yakalayalım:
+                    const soupList = menuData.soup || menuData.soups || [];
+                    const mainCourseList = menuData.mainCourse || menuData.mainCourses || [];
+                    const sideList = menuData.side || menuData.sides || [];
+                    const coldList = menuData.cold || menuData.colds || [];
+                    const dessertList = menuData.dessert || menuData.desserts || [];
+
+                    const soupIds = await findOrCreateFoods(soupList, "soup");
+                    const mainCourseIds = await findOrCreateFoods(mainCourseList, "mainCourse");
+                    const sideIds = await findOrCreateFoods(sideList, "side");
+                    const coldIds = await findOrCreateFoods(coldList, "cold");
+                    const dessertIds = await findOrCreateFoods(dessertList, "dessert");
+
+                    // Bugünün tarihini oluştur (YYYY-MM-DD formatında)
+                    const today = new Date().toISOString().split("T")[0];
+
+                    // Menüyü güncelle veya oluştur
+                    await Menu.findOneAndUpdate(
+                        { date: today },
+                        {
+                            date: today,
+                            soup: soupIds,
+                            mainCourse: mainCourseIds,
+                            side: sideIds,
+                            cold: coldIds,
+                            dessert: dessertIds,
+                            status: "active"
+                        },
+                        { upsert: true, new: true }
+                    );
+
+                    console.log(`🎉 BAŞARILI: ${today} tarihli menü veritabanına işlendi ve web sitesinde güncellendi!`);
+
+                } catch (parseError) {
+                    console.log("🤖 Gemini Ham Cevabı:", responseText);
+                    console.error("❌ JSON Ayrıştırma Hatası:", parseError.message);
                 }
+            } catch (error) {
+                console.error("❌ Gemini API hatası:", error);
             }
-        } else {
-            console.log("⚠️ Mesaj içeriği (metin) boş veya desteklenmeyen tip.");
+        } else if (text) {
+            console.log("⚠️ Mesaj dikkate alınmadı (Hedef grup değil veya botun kendisi).");
         }
+
     });
 
     return sock;
