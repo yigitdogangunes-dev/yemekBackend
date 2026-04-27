@@ -3,10 +3,15 @@ const { Boom } = require("@hapi/boom");
 const pino = require("pino");
 const QRCode = require("qrcode");
 const path = require("path");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 let sock;
 let qrCode = null;
 let connectionStatus = "Disconnected";
+
+// Gemini Yapılandırması
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const geminiModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
 const logger = pino({ level: "error" });
 
@@ -34,9 +39,9 @@ async function connectToWhatsApp() {
         if (connection === "close") {
             const statusCode = lastDisconnect.error?.output?.statusCode || lastDisconnect.error?.data?.reason;
             const isLoggedOut = statusCode == 401 || statusCode == 405 || statusCode == DisconnectReason.loggedOut;
-            
+
             console.log("❌ Bağlantı kapandı, durum/sebep kodu:", statusCode);
-            
+
             connectionStatus = "Disconnected";
             qrCode = null;
 
@@ -65,14 +70,54 @@ async function connectToWhatsApp() {
     // --- GELEN MESAJLARI DİNLE ---
     sock.ev.on("messages.upsert", async (m) => {
         const msg = m.messages[0];
-        if (m.type === "notify") {
-            const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
-            const sender = msg.key.remoteJid;
-            const isMe = msg.key.fromMe;
+
+        // Mesaj paketini logla (gelip gelmediğini anlamak için)
+        if (!msg.message) return;
+
+        const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.buttonsResponseMessage?.selectedButtonId || msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId;
+        const sender = msg.key.remoteJid;
+        const isMe = msg.key.fromMe;
+
+        console.log(`📩 Mesaj Yakalandı! Gönderen: ${sender}, Tip: ${m.type}, Kendi Mesajım mı: ${isMe}`);
+
+        if (text) {
+            console.log(`💬 Mesaj İçeriği: ${text}`);
 
             if (text) {
-                console.log(`📩 [WhatsApp] ${isMe ? 'BEN' : sender.split('@')[0]}: ${text}`);
+                try {
+                    console.log("🤖 Gemini menüyü ayrıştırıyor...");
+
+                    const prompt = `Sen bir yemek menüsü ayrıştırıcısısın. Aşağıdaki metni oku ve yemekleri şu kategorilere ayırarak sadece JSON formatında yanıt ver:
+                    - soup (Çorbalar)
+                    - mainCourse (Ana Yemekler)
+                    - side (Pilav, Makarna, Yardımcı Yemekler)
+                    - cold (Salata, Cacık, Yoğurt, Soğuklar)
+                    - dessert (Tatlılar)
+
+                    Sadece saf JSON döndür, kod blokları ( \`\`\` ) kullanma.
+
+                    Metin: "${text}"`;
+
+                    const result = await geminiModel.generateContent(prompt);
+                    const responseText = result.response.text().trim();
+
+                    try {
+                        const cleanJson = responseText.replace(/```json|```/g, "").trim();
+                        const menuData = JSON.parse(cleanJson);
+
+                        console.log("✅ Gemini JSON Çıktısı:");
+                        console.log(JSON.stringify(menuData, null, 2));
+
+                    } catch (parseError) {
+                        console.log("🤖 Gemini Ham Cevabı:", responseText);
+                        console.error("❌ JSON Ayrıştırma Hatası:", parseError.message);
+                    }
+                } catch (error) {
+                    console.error("❌ Gemini hatası:", error);
+                }
             }
+        } else {
+            console.log("⚠️ Mesaj içeriği (metin) boş veya desteklenmeyen tip.");
         }
     });
 
