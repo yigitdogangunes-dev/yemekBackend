@@ -15,7 +15,7 @@ let connectionStatus = "Disconnected";
 
 // Gemini Yapılandırması
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const geminiModel = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite-preview" });
+const geminiModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
 const logger = pino({ level: "error" });
 
@@ -71,12 +71,57 @@ async function connectToWhatsApp() {
         }
     });
 
+    // --- MESAJ GÜNCELLEMELERİNİ (EDIT) DİNLE ---
+    sock.ev.on("messages.update", async (updates) => {
+        for (const update of updates) {
+            if (update.update && update.update.message && update.update.message.editedMessage) {
+                const editedMsg = update.update.message.editedMessage;
+                const newText = editedMsg.message?.protocolMessage?.editedMessage?.conversation ||
+                    editedMsg.message?.protocolMessage?.editedMessage?.extendedTextMessage?.text ||
+                    editedMsg.message?.conversation ||
+                    editedMsg.message?.extendedTextMessage?.text;
+
+                const sender = update.key.remoteJid;
+
+                if (newText) {
+                    console.log(`✏️ [DÜZENLENMİŞ MESAJ YAKALANDI] Gönderen: ${sender}, Yeni Metin: ${newText}`);
+                    // Düzenlenmiş mesajı işlemek için normal mesaj gibi içeri alalım
+                    const fakeMsg = {
+                        key: update.key,
+                        message: { conversation: newText }
+                    };
+                    processIncomingMessage({ messages: [fakeMsg], type: "notify" });
+                }
+            }
+        }
+    });
+
     // --- GELEN MESAJLARI DİNLE ---
     sock.ev.on("messages.upsert", async (m) => {
+        processIncomingMessage(m);
+    });
+
+    async function processIncomingMessage(m) {
         const msg = m.messages[0];
 
         // Mesaj paketini logla (gelip gelmediğini anlamak için)
         if (!msg.message) return;
+
+        // --- SİLİNEN MESAJLARI (REVOKE) YAKALA ---
+        const protocolMsg = msg.message.protocolMessage;
+        if (protocolMsg && protocolMsg.type === 0) { // 0 = REVOKE (Herkes için silindi)
+            const deletedMessageId = protocolMsg.key.id;
+            console.log(`🗑️ [MESAJ SİLİNDİ] WhatsApp'tan bir mesaj silindi. ID: ${deletedMessageId}`);
+
+            // Bu mesaj ID'sine sahip tüm siparişleri veritabanından silelim
+            const deleteResult = await Record.deleteMany({ messageId: deletedMessageId });
+            if (deleteResult.deletedCount > 0) {
+                console.log(`✅ [SİPARİŞLER İPTAL EDİLDİ] Silinen mesaja ait ${deleteResult.deletedCount} sipariş veritabanından kaldırıldı!`);
+            } else {
+                console.log(`ℹ️ [BİLGİ] Silinen mesaj bir sipariş değildi veya veritabanında bulunamadı.`);
+            }
+            return; // Silinme işlemi tamamlandı, mesajı daha fazla işlemeye gerek yok
+        }
 
         const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.buttonsResponseMessage?.selectedButtonId || msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId;
         const sender = msg.key.remoteJid;
@@ -93,8 +138,8 @@ async function connectToWhatsApp() {
                 console.log("🤖 Gemini mesajı analiz ediyor (Menü veya Sipariş?)...");
 
                 // Veritabanındaki mevcut yemek ve kullanıcı listelerini çekelim
-                const existingFoods = await Food.find({}, "name price");
-                const existingFoodNames = existingFoods.map(f => f.name).join(", ");
+                const existingFoods = await Food.find({}, "_id name category");
+                const existingFoodNames = existingFoods.map(f => `{"id": "${f._id}", "name": "${f.name}"}`).join(", ");
 
                 const existingUsers = await User.find({});
                 const existingUserNames = existingUsers.map(u => u.lastName ? `${u.firstName} ${u.lastName}` : u.firstName).join(", ");
@@ -102,38 +147,56 @@ async function connectToWhatsApp() {
                 const prompt = `Sen zeki bir asistan ve ayrıştırıcısın. Aşağıdaki metni dikkatlice oku ve mesajın türünü belirle ("MENU", "ORDER" veya "IGNORE").
 
                 KULLANICILARIMIZ: [${existingUserNames}]
+                YEMEKLERİMİZ: [${existingFoodNames}]
 
                 GENEL KURALLAR:
                 1. SADECE VE SADECE gelen mesajın içinde gerçekten yazan yemekleri kullan! Mesajda geçmeyen hiçbir yemeği kafandan uydurup JSON'a EKLEME! Bir kategoride (örn. tatlı) yemek yoksa o kısmı boş dizi "[]" bırak.
                 2. Mesajda yazan HİÇBİR yemeği atlama veya yok sayma! Gruptan yazılan her bir yemek mutlaka listeye dahil edilmelidir.
-                3. Gelen mesajdaki yemeklerin isimlerini BİREBİR KORU (Örn: "İzmir Köfte" yazıyorsa "İzmir Köfte", "Ispanak" yazıyorsa "Ispanak" olarak bırak). 
-                4. Yalnızca çok bariz kısaltmalarda kelime eklemesi yapabilirsin (Örn: "mercimek" -> "Mercimek Çorbası", "pirinç" -> "Pirinç Pilavı"). Asla bir yemeği başka bir yemeğe dönüştürme! (Örn: İçinde köfte geçiyor diye İzmir Köfte'yi Salçalı Köfte'ye ÇEVİRME!)
+                4. KİŞİ/YEMEK AYRIMI ÖNCELİĞİ: Bir kelimenin kişi mi yoksa yemek mi olduğunu anlamak için ŞU SIRALAMAYI TAKİP ET:
+                   A) Kelime KULLANICILARIMIZ listesinde bir isimle eşleşiyor mu? -> EVET ise o bir KİŞİDİR (userName).
+                   B) Kelimenin yanında "Misafir" ibaresi var mı? -> EVET ise o bir KİŞİDİR (guestName).
+                   C) Kelime YEMEKLERİMİZ listesinde (veya içinde) geçiyor mu? (Örn: "Kemalpaşa", "Ali Nazik", "Hasanpaşa") -> EVET ise o bir YEMEKTİR (foods), sakın kişi sanma!
+                   D) Yukarıdakilerin hiçbiri değilse (Örn: Listede olmayan "Mehmet" yazılmışsa) -> O bir KİŞİDİR (guestName).
+                5. Eğer mesajda yazılan sipariş için düzenleme amacıyla whatsapp mesajı düzenlenmişse siparişi güncelle.
 
                 1. EĞER metin günlük olarak hazırlanan kapsamlı bir yemek menüsü listesi ise, type: "MENU" döndür.
                 Format:
                 {
                   "type": "MENU",
                   "data": {
-                    "soup": ["..."], // SADECE Çorbalar
-                    "mainCourse": ["..."], // SADECE Ana Yemekler (Et, tavuk, sebze yemekleri vb.)
-                    "side": ["..."], // SADECE Yardımcı Yemekler (Pilav, makarna, börek vb.)
-                    "cold": ["..."], // SADECE Soğuklar (Salata, cacık, yoğurt, meze vb.)
-                    "dessert": ["..."] // SADECE Tatlılar veya Meyveler
+                    "soup": [ {"id": "123...", "name": "Mercimek Çorbası"} ], // Çorbalar
+                    "mainCourse": [ {"id": null, "name": "Tavuk Sote"} ], // Ana Yemekler (Et, tavuk, sebze yemekleri vb.)
+                    "side": [ {"id": "123...", "name": "Pirinç Pilavı"} ], // Yardımcı Yemekler (Pilav, makarna, börek vb.)
+                    "cold": [ {"id": "123...", "name": "Cacık"} ], // Soğuklar (Salata, cacık, yoğurt, meze vb.)
+                    "dessert": [ {"id": "123...", "name": "Sütlaç"} ] // Tatlılar veya Meyveler
                   }
                 }
 
-                2. EĞER metin bir kişinin yemek siparişi ise (örn: "yiğit tavuk suyu kuru fasülye"), type: "ORDER" döndür. Gelen siparişte yazılan porsiyonlara dikkat et. "Yarım", "Az", "1.5" gibi ifadeler porsiyon bilgisini belirtir. Eğer bir porsiyon belirtilmemişse porsiyon bilgisini "Tam" olarak ata. Belirtilmiş ise belirtilen porsiyona göre yemeği oluştur.
+                2. EĞER metin yemek siparişi ise, type: "ORDER" döndür. Sipariş birden fazla kişi için olabilir (Örn: "Ben tavuk sote, misafir ahmet köfte"). Bu yüzden "data" alanı DAİMA bir "SİPARİŞLER DİZİSİ" (Array) olmalıdır. Her sipariş için:
+                   - Eğer kişi sistemde varsa "isGuest": false yap, "guestName": "" bırak, "userName" alanına KULLANICILARIMIZ listesindeki en iyi eşleşen TAM İSMİ yaz.
+                   - Eğer kişi sistemde YOKSA veya yanına "Misafir" yazılmışsa, "isGuest": true yap, "userName": "" bırak ve "guestName" alanına misafirin adını yaz.
+                   Gelen siparişte yazılan porsiyonlara dikkat et. "Yarım", "Az", "1.5" gibi ifadeler porsiyon bilgisini belirtir. Porsiyon belirtilmemişse 1 ata.
                 Format:
                 {
                   "type": "ORDER",
-                  "data": {
-                    "userName": "Yiğit Doğan", // KULLANICILARIMIZ listesinden kısaltmaları da ("y.emre" -> "Yunus Emre") anlayarak en iyi eşleşen TAM İSMİ yaz. Asla kısaltma bırakma!
-                    "foods": [
-                      { "name": "Tavuk Suyu Çorbası", "portion": 1 }, // Porsiyon yoksa veya tamsa 1
-                      { "name": "Kuru Fasulye", "portion": 0.5 }, // Az / Yarım için 0.5
-                      { "name": "Salçalı Köfte", "portion": 1.5 } // 1.5 porsiyon için 1.5
-                    ]
-                  }
+                  "data": [
+                    {
+                      "userName": "Yiğit Doğan",
+                      "isGuest": false,
+                      "guestName": "",
+                      "foods": [
+                        { "id": "123...", "name": "Tavuk Suyu Çorbası", "portion": 1 }
+                      ]
+                    },
+                    {
+                      "userName": "",
+                      "isGuest": true,
+                      "guestName": "Ahmet (Misafir)",
+                      "foods": [
+                        { "id": null, "name": "Yeni Yemek", "portion": 0.5 }
+                      ]
+                    }
+                  ]
                 }
 
                 3. EĞER metin bir sipariş veya menü değilse, sadece sohbet, selamlaşma veya alakasız bir mesajsa, type: "IGNORE" döndür.
@@ -161,12 +224,26 @@ async function connectToWhatsApp() {
                         console.log(JSON.stringify(menuData, null, 2));
 
                         // --- MENÜ İŞLEMLERİ ---
-                        const findOrCreateFoods = async (foodNames, category) => {
+                        const findOrCreateFoods = async (foodItems, category) => {
                             const ids = [];
-                            if (!foodNames || !Array.isArray(foodNames)) return ids;
-                            for (const name of foodNames) {
+                            if (!foodItems || !Array.isArray(foodItems)) return ids;
+
+                            for (const item of foodItems) {
+                                // Gelen format { id: null, name: "Sote" } veya string olabilir
+                                const name = typeof item === "string" ? item : item.name;
+                                const id = typeof item === "object" ? item.id : null;
+
                                 if (!name) continue;
-                                let food = await Food.findOne({ name: { $regex: new RegExp(`^${name.trim()}$`, "i") } });
+
+                                let food = null;
+                                if (id) {
+                                    food = await Food.findById(id);
+                                }
+
+                                if (!food) {
+                                    food = await Food.findOne({ name: { $regex: new RegExp(`^${name.trim()}$`, "i") } });
+                                }
+
                                 if (!food) {
                                     food = await Food.create({
                                         name: name.trim(),
@@ -216,72 +293,102 @@ async function connectToWhatsApp() {
                         console.log("✅ Sipariş tespit edildi:");
                         console.log(JSON.stringify(orderData, null, 2));
 
-                        const { userName, foods } = orderData;
+                        // orderData artık bir DİZİ (Array). Eğer array değilse array'e çevir.
+                        const ordersArray = Array.isArray(orderData) ? orderData : [orderData];
 
-                        // Kullanıcıyı veritabanından bul (Gemini'nin ürettiği tam isimle eşleşme)
-                        let matchedUser = existingUsers.find(u => {
-                            let fName = u.lastName ? `${u.firstName} ${u.lastName}` : u.firstName;
-                            return fName.toLowerCase() === userName.toLowerCase();
-                        });
-
-                        // Eğer tam bulamazsa ilk isme göre kaba arama yapalım
-                        if (!matchedUser) {
-                            let first = userName.split(" ")[0];
-                            matchedUser = existingUsers.find(u => u.firstName.toLowerCase() === first.toLowerCase());
+                        // DÜZENLENMİŞ MESAJ DESTEĞİ: Eğer bu mesaj daha önce işlenmişse, ona ait tüm eski siparişleri
+                        // temizleyelim ki misafir ismi değiştiğinde eskisi veritabanında "hayalet" olarak kalmasın.
+                        if (msg.key.id) {
+                            await Record.deleteMany({ messageId: msg.key.id });
                         }
 
-                        if (!matchedUser) {
-                            console.log(`⚠️ Kullanıcı bulunamadı, sipariş oluşturulamıyor: ${userName}`);
-                            return;
-                        }
+                        for (const order of ordersArray) {
+                            const { userName, isGuest, guestName, foods } = order;
 
-                        // Yemekleri veritabanından bul ve id, price bilgilerini toparla. Yoksa yeni yemek oluştur.
-                        const orderItems = [];
-                        for (let foodItem of (foods || [])) {
-                            // Gemini bazen array of string, bazen array of objects dönebilir (hata payı)
-                            let foodName = typeof foodItem === "string" ? foodItem : foodItem.name;
-                            let portion = typeof foodItem === "object" && foodItem.portion ? Number(foodItem.portion) : 1;
+                            let matchedUser = null;
 
-                            if (!foodName) continue;
-
-                            let foodDoc = await Food.findOne({ name: { $regex: new RegExp(`^${foodName.trim()}$`, "i") } });
-
-                            // Eğer yemek sistemde yoksa, sipariş geldiği için varsayılan ayarlarla oluşturalım
-                            if (!foodDoc) {
-                                foodDoc = await Food.create({
-                                    name: foodName.trim(),
-                                    image: "/assets/placeholder.png",
-                                    price: 50, // Varsayılan fiyat
-                                    category: "mainCourse" // Bilinmediği için varsayılan
+                            if (!isGuest && userName) {
+                                // Kullanıcıyı veritabanından bul
+                                matchedUser = existingUsers.find(u => {
+                                    let fName = u.lastName ? `${u.firstName} ${u.lastName}` : u.firstName;
+                                    return fName.toLowerCase() === userName.toLowerCase();
                                 });
-                                console.log(`[Siparişte Yeni Yemek Eklendi] -> ${foodName.trim()}`);
+
+                                if (!matchedUser) {
+                                    let first = userName.split(" ")[0];
+                                    matchedUser = existingUsers.find(u => u.firstName.toLowerCase() === first.toLowerCase());
+                                }
+
+                                if (!matchedUser) {
+                                    console.log(`⚠️ Kullanıcı bulunamadı, sipariş misafir olarak kaydediliyor: ${userName}`);
+                                    // Bulamazsa fallback olarak misafir yap
+                                }
                             }
 
-                            if (foodDoc) {
-                                orderItems.push({
-                                    food: foodDoc._id,
-                                    portion: portion,
-                                    price: foodDoc.price
-                                });
+                            // Misafir kontrolü (Kullanıcı bulunamadıysa da misafir say)
+                            const isActuallyGuest = isGuest || !matchedUser;
+                            const finalGuestName = isActuallyGuest ? (guestName || userName || "İsimsiz Misafir") : "";
+
+                            // Yemekleri toparla
+                            const orderItems = [];
+                            for (let foodItem of (foods || [])) {
+                                let foodName = typeof foodItem === "string" ? foodItem : foodItem.name;
+                                let id = typeof foodItem === "object" ? foodItem.id : null;
+                                let portion = typeof foodItem === "object" && foodItem.portion ? Number(foodItem.portion) : 1;
+
+                                if (!foodName) continue;
+
+                                let foodDoc = null;
+                                if (id) {
+                                    foodDoc = await Food.findById(id);
+                                }
+
+                                if (!foodDoc) {
+                                    foodDoc = await Food.findOne({ name: { $regex: new RegExp(`^${foodName.trim()}$`, "i") } });
+                                }
+
+                                if (!foodDoc) {
+                                    foodDoc = await Food.create({
+                                        name: foodName.trim(),
+                                        image: "/assets/placeholder.png",
+                                        price: 50,
+                                        category: "mainCourse"
+                                    });
+                                    console.log(`[Siparişte Yeni Yemek Eklendi] -> ${foodName.trim()}`);
+                                }
+
+                                if (foodDoc) {
+                                    orderItems.push({
+                                        food: foodDoc._id,
+                                        portion: portion,
+                                        price: foodDoc.price * portion
+                                    });
+                                }
                             }
-                        }
 
-                        if (orderItems.length > 0) {
-                            const today = new Date().toISOString().split("T")[0];
+                            if (orderItems.length > 0) {
+                                const today = new Date().toISOString().split("T")[0];
 
-                            // Kişinin bugünkü siparişi varsa üstüne yaz (güncelle), yoksa yeni Record oluştur
-                            await Record.findOneAndUpdate(
-                                { date: today, user: matchedUser._id },
-                                {
-                                    date: today,
-                                    user: matchedUser._id,
-                                    items: orderItems
-                                },
-                                { upsert: true, new: true }
-                            );
-                            console.log(`🚀 SİPARİŞ BAŞARILI: ${matchedUser.firstName} adına sipariş kaydedildi!`);
-                        } else {
-                            console.log("⚠️ Siparişte hiç geçerli yemek bulunamadığı için sipariş boş, kayıt yapılmadı.");
+                                const query = isActuallyGuest
+                                    ? { date: today, isGuest: true, guestName: finalGuestName }
+                                    : { date: today, user: matchedUser._id };
+
+                                await Record.findOneAndUpdate(
+                                    query,
+                                    {
+                                        date: today,
+                                        user: isActuallyGuest ? null : matchedUser._id,
+                                        isGuest: isActuallyGuest,
+                                        guestName: finalGuestName,
+                                        items: orderItems,
+                                        messageId: msg.key.id || null
+                                    },
+                                    { upsert: true, new: true }
+                                );
+                                console.log(`🚀 SİPARİŞ BAŞARILI: ${isActuallyGuest ? finalGuestName + " (Misafir)" : matchedUser.firstName} adına kaydedildi!`);
+                            } else {
+                                console.log(`⚠️ ${userName || guestName} için geçerli yemek bulunamadı.`);
+                            }
                         }
                     }
 
@@ -295,8 +402,7 @@ async function connectToWhatsApp() {
         } else if (text) {
             console.log("⚠️ Mesaj dikkate alınmadı (Hedef grup değil veya botun kendisi).");
         }
-
-    });
+    }
 
     return sock;
 }

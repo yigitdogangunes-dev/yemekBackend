@@ -10,7 +10,14 @@ const recordSchema = new mongoose.Schema({
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
-    required: true // Profile name is mandatory
+    required: false // Artık misafir siparişleri için zorunlu değil
+  },
+  isGuest: {
+    type: Boolean,
+    default: false
+  },
+  guestName: {
+    type: String // Sadece isGuest true ise kullanılır
   },
   items: [
     {
@@ -30,7 +37,10 @@ const recordSchema = new mongoose.Schema({
       },
 
     }
-  ]
+  ],
+  messageId: {
+    type: String // WhatsApp mesaj ID'sini tutmak için (silinme durumunda bulabilmek için)
+  }
 }, { timestamps: true }); // Automatically records createdAt and updatedAt
 
 module.exports = mongoose.model("Record", recordSchema);
