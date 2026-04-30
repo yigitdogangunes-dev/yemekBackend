@@ -40,6 +40,9 @@ const recordSchema = new mongoose.Schema({
   ],
   messageId: {
     type: String // WhatsApp mesaj ID'sini tutmak için (silinme durumunda bulabilmek için)
+  },
+  senderJid: {
+    type: String // Siparişi veren kişinin WhatsApp ID'sini tutmak için
   }
 }, { timestamps: true }); // Automatically records createdAt and updatedAt
 
