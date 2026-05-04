@@ -48,7 +48,7 @@ exports.createRecord = async (req, res) => {
     const updatedRecord = await Record.findOneAndUpdate(
       { date, user }, // Arama kriteri
       { items },        // Güncelleme verisi
-      { new: true, upsert: true, runValidators: true }
+      { returnDocument: "after", upsert: true, runValidators: true }
     );
 
     res.status(201).json(updatedRecord);

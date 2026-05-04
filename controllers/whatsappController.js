@@ -16,7 +16,7 @@ let connectionStatus = "Disconnected";
 
 // Gemini Yapılandırması
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const geminiModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+const geminiModel = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
 
 const logger = pino({ level: "error" });
 
@@ -75,24 +75,28 @@ async function connectToWhatsApp() {
     // --- MESAJ GÜNCELLEMELERİNİ (EDIT) DİNLE ---
     sock.ev.on("messages.update", async (updates) => {
         for (const update of updates) {
-            if (update.update && update.update.message && update.update.message.editedMessage) {
-                const editedMsg = update.update.message.editedMessage;
-                const newText = editedMsg.message?.protocolMessage?.editedMessage?.conversation ||
-                    editedMsg.message?.protocolMessage?.editedMessage?.extendedTextMessage?.text ||
-                    editedMsg.message?.conversation ||
-                    editedMsg.message?.extendedTextMessage?.text;
+            const message = update.update?.message;
+            if (!message) continue;
 
+            let newText = "";
+            
+            if (message.protocolMessage && message.protocolMessage.type === 14) {
+                const editedMessage = message.protocolMessage.editedMessage;
+                newText = editedMessage?.conversation || editedMessage?.extendedTextMessage?.text;
+            } else if (message.editedMessage) {
+                const editedMessage = message.editedMessage.message;
+                newText = editedMessage?.conversation || editedMessage?.extendedTextMessage?.text || 
+                          message.editedMessage?.conversation || message.editedMessage?.extendedTextMessage?.text;
+            }
+
+            if (newText) {
                 const sender = update.key.remoteJid;
-
-                if (newText) {
-                    console.log(`✏️ [DÜZENLENMİŞ MESAJ YAKALANDI] Gönderen: ${sender}, Yeni Metin: ${newText}`);
-                    // Düzenlenmiş mesajı işlemek için normal mesaj gibi içeri alalım
-                    const fakeMsg = {
-                        key: update.key,
-                        message: { conversation: newText }
-                    };
-                    processIncomingMessage({ messages: [fakeMsg], type: "notify" });
-                }
+                console.log(`✏️ [DÜZENLENMİŞ MESAJ YAKALANDI] Gönderen: ${sender}, Yeni Metin: ${newText}`);
+                const fakeMsg = {
+                    key: update.key,
+                    message: { conversation: newText }
+                };
+                processIncomingMessage({ messages: [fakeMsg], type: "notify" });
             }
         }
     });
@@ -170,7 +174,7 @@ async function connectToWhatsApp() {
                 const today = new Date().toISOString().split("T")[0];
                 const todayMenu = await Menu.findOne({ date: today }).populate("soup mainCourse side cold dessert");
 
-                if (command === "/komutlar") {
+                if (command === "/komutlar" || command === "/commands") {
                     const helpText = `🤖 *YEMEK BOTU KOMUTLARI* 🤖\n\n` +
                         `🍴 */liste* : Bugünün yemek menüsünü gösterir.\n` +
                         `🍱 */siparisim* : Bugün verdiğiniz siparişleri listeler.\n` +
@@ -181,7 +185,7 @@ async function connectToWhatsApp() {
                     return;
                 }
 
-                if (command === "/liste") {
+                if (command === "/liste" || command === "/menu") {
                     if (!todayMenu) {
                         await sock.sendMessage(sender, { text: "📝 Bugün için henüz bir menü girilmemiş.", quoted: msg });
                         return;
@@ -197,7 +201,7 @@ async function connectToWhatsApp() {
                     return;
                 }
 
-                if (command === "/siparisim") {
+                if (command === "/siparisim" || command === "/order") {
                     const myRecords = await Record.find({ date: today, senderJid: sender }).populate("user items.food");
                     if (myRecords.length === 0) {
                         await sock.sendMessage(sender, { text: "🔍 Bugün için henüz bir siparişiniz bulunmuyor.", quoted: msg });
@@ -219,7 +223,7 @@ async function connectToWhatsApp() {
                     return;
                 }
 
-                if (command === "/iptal") {
+                if (command === "/iptal" || command === "/delete") {
                     const args = text.split(" ").slice(1);
                     const targetName = args.join(" ").trim().toLowerCase();
 
@@ -261,7 +265,7 @@ async function connectToWhatsApp() {
                     return;
                 }
 
-                if (command === "/yardim") {
+                if (command === "/yardim" || command === "/help") {
                     const guideText = `❓ *NASIL SİPARİŞ VERİLİR?* ❓\n\n` +
                         `Botu kullanmak çok kolay! Grupta normal bir şekilde yazmanız yeterli:\n\n` +
                         `✅ *Kendi siparişiniz için:* "İsminiz ve menüden seçeceğiniz yemek adı"\n` +
@@ -304,15 +308,24 @@ async function connectToWhatsApp() {
 
                 const prompt = `Sen sadece metin ayrıştırıcısın. Aşağıdaki metni oku ve türünü belirle.
                 
-                KRİTİK KURALLAR:
-                1. SADECE VE SADECE METİNDE YAZAN KELİMELERİ AL.
-                2. Yemek isimlerine ASLA ekleme yapma! Mesajda "Çorba" yazıyorsa "Çorbası" yapma. Ne yazıyorsa o!
-                3. TİP "MENU" İSE: Aşağıdaki YEMEKLER/BUGÜN listelerini TAMAMEN YOK SAY. Sadece metindeki isimleri al.
-                4. TİP "ORDER" İSE: Yemekleri eşleştirmek için BUGÜN listesini kullan.
+                KRİTİK KURALLAR (HAYATİ ÖNEMDE):
+                1. TİP "MENU" İSE: 
+                   - Mesajda ne yazıyorsa harfiyen al. 
+                   - Asla yemek isimlerini düzeltme veya değiştirme.
+                   - YEMEKLER/BUGÜN listesini TAMAMEN YOK SAY.
+                
+                2. TİP "ORDER" İSE: 
+                   - Personelin yazdığı yemeği BUGÜN listesindeki en benzer yemekle eşleştir.
+                   - Örneğin: "fasuly", "k.fasulye", "kuru fasuly" gibi yazımları BUGÜN listesindeki "Kuru Fasulye" ile eşleştir ve o yemeğin ID'sini ata.
+                   - Ancak personelin yazdığı yemek BUGÜN listesindeki hiçbir yemeğe benzemiyorsa (farklı bir yemekse), o zaman ismini değiştirme ve "isOffMenu: true" yap.
+                
+                3. GENEL: Su, ayran, soda gibi içecekleri asla atlama. Sadece saf JSON döndür.
 
                 KULLANICILAR: [${existingUserNames}]
                 BUGÜN: [${menuFoodNames}]
 
+                DÖNÜŞ FORMATLARI:
+                1. EĞER metin bir yemek menüsü ise, type: "MENU" döndür.
                 {
                   "type": "MENU",
                   "data": {
@@ -324,16 +337,9 @@ async function connectToWhatsApp() {
                   }
                 }
 
-                2. EĞER metin yemek siparişi ise, type: "ORDER" döndür. Sipariş birden fazla kişi için olabilir (Örn: "Ben tavuk sote, misafir ahmet köfte"). Bu yüzden "data" alanı DAİMA bir "SİPARİŞLER DİZİSİ" (Array) olmalıdır. Her sipariş için:
-                   - Eğer kişi sistemde varsa "isGuest": false yap, "guestName": "" bırak, "userName" alanına KULLANICILARIMIZ listesindeki en iyi eşleşen TAM İSMİ yaz.
-                   - Eğer kişi sistemde YOKSA veya yanına "Misafir" yazılmışsa, "isGuest": true yap, "userName": "" bırak ve "guestName" alanına misafirin adını yaz.
-                   - ÖNEMLİ (MENÜ KONTROLÜ): Sipariş edilen yemeği BUGÜNKÜ_MENÜ listesiyle karşılaştır. 
-                     * SADECE VE SADECE yemek BUGÜNKÜ_MENÜ listesinde TAM OLARAK varsa (veya "Kuru Fasulye" yerine "Kuru" gibi çok net bir kısaltmaysa): "isOffMenu": false yap.
-                     * DİKKAT: Benzer türdeki yemekleri birbirine karıştırma! (Örn: Menüde "Pirinç Pilavı" varsa ama kullanıcı "Bulgur Pilavı" istediyse bu isOffMenu: true olmalıdır. "Pirinç" ve "Bulgur" farklıdır!)
-                     * Eğer yemek BUGÜNKÜ_MENÜ içinde YOKSA (YEMEKLERİMİZ listesinde olsa bile): "isOffMenu": true yap. 
-                     * "reason": Bu kararı neden verdiğini (Örn: "Pirinç vs Bulgur farkı", "Menüde tam eşleşme", "Veritabanında yok") 1-2 kelimeyle yaz.
-                   - ÖNEMLİ (BİRLEŞİK SİPARİŞ): "X üstü Y" veya "X ve Y yarımşar" gibi durumlarda her iki yemeğe de 0.5 porsiyon ata.
-                   Gelen siparişte yazılan porsiyonlara dikkat et. "Yarım", "Az", "1.5" gibi ifadeler porsiyon bilgisini belirtir. Porsiyon belirtilmemişse 1 ata.
+                2. EĞER metin yemek siparişi ise, type: "ORDER" döndür.
+                   - "foods" listesinde her öğe için: { "id": "bulduğun_id_veya_null", "name": "EŞLEŞİRSE_MENÜDEKİ_İSİM_DEĞİLSE_KULLANICININ_YAZDIĞI_İSİM", "portion": miktar_sayi, "isOffMenu": true/false, "reason": "neden_menu_disi" }
+                   - ÖNEMLİ: Eğer yemek BUGÜN listesinde varsa, "name" alanına menüdeki düzgün ismi yaz. Yoksa personelin yazdığını olduğu gibi bırak.
                 Format:
                 {
                   "type": "ORDER",
@@ -357,8 +363,7 @@ async function connectToWhatsApp() {
                   ]
                 }
 
-                3. EĞER metin bir sipariş veya menü değilse, sadece sohbet, selamlaşma veya alakasız bir mesajsa, type: "IGNORE" döndür.
-                Format: { "type": "IGNORE" }
+                3. EĞER metin bir sipariş veya menü değilse (sohbet, teşekkür, geribildirim, selamlaşma veya alakasız bir mesajsa), type: "IGNORE" döndür.
 
                 Sadece saf JSON döndür, kod blokları ( \`\`\` ) kullanma.
 
@@ -403,11 +408,7 @@ async function connectToWhatsApp() {
                     }
 
                     if (parsedData.type === "IGNORE" || !parsedData.type) {
-                        console.log("⚠️ Bu mesaj bir menü veya sipariş değil. İşlem yapılmadı.");
-                        await sock.sendMessage(sender, {
-                            text: "Bu mesaj bir yemek siparişi veya menü olarak algılanamadı. Lütfen mesajınızı kontrol edin.",
-                            quoted: msg
-                        });
+                        console.log("🤫 [SESSİZCE ATLANDI] Bu bir sohbet veya alakasız mesaj.");
                         return;
                     }
 
@@ -471,7 +472,7 @@ async function connectToWhatsApp() {
                                 dessert: dessertIds,
                                 status: "active"
                             },
-                            { upsert: true, new: true }
+                            { upsert: true, returnDocument: "after" }
                         );
 
                         console.log(`🎉 BAŞARILI: ${today} tarihli menü kaydedildi!`);
@@ -528,6 +529,20 @@ async function connectToWhatsApp() {
                                 }
                             }
 
+                            // Gemini isGuest: true dese bile guestName ile de aramayı dene
+                            // (Gemini kayıtlı kullanıcıyı misafir sanmış olabilir)
+                            if (!matchedUser && guestName) {
+                                const cleanGuestName = guestName.trim().toLowerCase();
+                                matchedUser = existingUsers.find(u => {
+                                    let fName = (u.lastName ? `${u.firstName} ${u.lastName}` : u.firstName).trim().toLowerCase();
+                                    return fName === cleanGuestName;
+                                });
+                                if (!matchedUser) {
+                                    let firstName = cleanGuestName.split(" ")[0];
+                                    matchedUser = existingUsers.find(u => u.firstName.trim().toLowerCase() === firstName);
+                                }
+                            }
+
                             // ÖNEMLİ: Gemini isGuest: true dese bile, veritabanında kullanıcıyı bulduysak misafir SAYMA!
                             const isActuallyGuest = !matchedUser;
                             const finalGuestName = isActuallyGuest ? (guestName || userName || "İsimsiz Misafir").trim() : "";
@@ -538,7 +553,6 @@ async function connectToWhatsApp() {
                                 let foodName = typeof foodItem === "string" ? foodItem : foodItem.name;
                                 let id = typeof foodItem === "object" ? foodItem.id : null;
                                 let portion = typeof foodItem === "object" && foodItem.portion ? Number(foodItem.portion) : 1;
-                                let isOffMenu = typeof foodItem === "object" ? foodItem.isOffMenu : false;
 
                                 if (!foodName) continue;
 
@@ -546,17 +560,11 @@ async function connectToWhatsApp() {
                                 const cleanFoodName = foodName.trim();
 
                                 if (id && mongoose.Types.ObjectId.isValid(id)) {
-                                    const tempDoc = await Food.findById(id);
-                                    // GÜVENLİK KONTROLÜ: Gemini'nin bulduğu yemeğin ismiyle kullanıcının yazdığı isim örtüşüyor mu?
-                                    if (tempDoc) {
-                                        const dbName = tempDoc.name.toLowerCase();
-                                        const reqName = cleanFoodName.toLowerCase();
-                                        // Eğer isimler birbirini içermiyorsa (veya çok uzaksa) Gemini yanılmıştır
-                                        if (dbName.includes(reqName) || reqName.includes(dbName) || reqName.length < 3) {
-                                            foodDoc = tempDoc;
-                                        } else {
-                                            console.log(`🚫 Gemini yanlış ID eşleştirdi: ${cleanFoodName} -> ${tempDoc.name}. ID reddedildi.`);
-                                        }
+                                    // SADECE bugün menüde varsa ID'yi kabul et
+                                    if (todayMenuFoodIds.has(id.toString())) {
+                                        foodDoc = await Food.findById(id);
+                                    } else {
+                                        console.log(`🚫 Gemini menüde olmayan bir yemeğe ID atadı (${cleanFoodName}). ID yok sayılıyor.`);
                                     }
                                 }
 
@@ -564,43 +572,115 @@ async function connectToWhatsApp() {
                                     foodDoc = await Food.findOne({ name: { $regex: new RegExp(`^${cleanFoodName}$`, "i") } });
                                 }
 
-                                // Eğer veritabanında hiçbir şekilde yoksa (veya Gemini bambaşka bir isim uydurduysa)
+                                // Exact match başarısız olduysa → Bugünün menüsünde Türkçe karakter normalize ederek ara
+                                if (!foodDoc && todayMenu) {
+                                    const normalize = (s) => s.toLowerCase()
+                                        .replace(/ğ/g, "g").replace(/ş/g, "s").replace(/ı/g, "i")
+                                        .replace(/ç/g, "c").replace(/ö/g, "o").replace(/ü/g, "u")
+                                        .replace(/İ/g, "i").replace(/Ğ/g, "g").replace(/Ş/g, "s");
+                                    const normalizedSearch = normalize(cleanFoodName);
+                                    const allMenuFoods = [
+                                        ...(todayMenu.soup || []),
+                                        ...(todayMenu.mainCourse || []),
+                                        ...(todayMenu.side || []),
+                                        ...(todayMenu.cold || []),
+                                        ...(todayMenu.dessert || [])
+                                    ];
+                                    const fuzzyMatch = allMenuFoods.find(mf => {
+                                        const normalizedMenu = normalize(mf.name);
+                                        return normalizedMenu === normalizedSearch;
+                                    });
+                                    if (fuzzyMatch) {
+                                        console.log(`🔄 Fuzzy eşleşme: "${cleanFoodName}" → "${fuzzyMatch.name}"`);
+                                        foodDoc = fuzzyMatch;
+                                    }
+                                }
+
+                                // Eğer hala bulunamadıysa → Tüm veritabanında normalize fuzzy ara (içecek değil olanlar)
                                 if (!foodDoc) {
-                                    console.log(`⚠️ Yemek tanınmıyor ve kaydedilmiyor: ${cleanFoodName}`);
-                                    hasInvalidFood = true;
-                                    // Gemini'nin döndürdüğü ismi düzeltip ekleyelim
-                                    invalidFoodNames.push(toTitleCase(foodName));
-                                    continue;
+                                    const normalize2 = (s) => s.toLowerCase()
+                                        .replace(/ğ/g, "g").replace(/ş/g, "s").replace(/ı/g, "i")
+                                        .replace(/ç/g, "c").replace(/ö/g, "o").replace(/ü/g, "u")
+                                        .replace(/İ/g, "i").replace(/Ğ/g, "g").replace(/Ş/g, "s");
+                                    const normalizedSearch2 = normalize2(cleanFoodName);
+                                    const dbFuzzy = existingFoods.find(f => {
+                                        if (f.category === "drink") return false;
+                                        const normalizedDB = normalize2(f.name);
+                                        return normalizedDB === normalizedSearch2;
+                                    });
+                                    if (dbFuzzy) {
+                                        console.log(`🔄 DB Fuzzy: "${cleanFoodName}" → "${dbFuzzy.name}" (off-menu olabilir)`);
+                                        foodDoc = await Food.findById(dbFuzzy._id);
+                                    }
+                                }
+
+                                // Eğer hala bulunamadıysa → İçecek mi değil mi kontrol et
+                                if (!foodDoc) {
+                                    // ---- İÇECEK TESPİT ALGORİTMASI (Kelime sınırı kontrolü) ----
+                                    const drinkKeywords = [
+                                        "su", "soğuk su", "ayran", "soda", "kola", "fanta", "sprite", "pepsi", "cola", "coca cola", "koka kola", "sade soda", "fanta", "sprite", "pepsi", "soguk cay", "limonlu soda", "soda limonlu", "soda elmalı", "elmalı soda", "zero cola", "cola zero", "kola zero", "zero kola", "limonlu soda", "sade soda", "meyve suyu", "portakal suyu",
+                                        "meyve suyu", "portakal suyu", "çay", "kahve", "limonata",
+                                        "iced tea", "ice tea", "şalgam", "süt", "nescafe", "gazoz"
+                                    ];
+                                    const lowerFoodName = cleanFoodName.toLowerCase();
+                                    // Kelime sınırı kontrolü: "su" → "sucuk" içinde EŞLEŞMEZ
+                                    const isDrink = drinkKeywords.includes(lowerFoodName);
+
+                                    if (isDrink) {
+                                        foodDoc = await Food.findOne({ name: { $regex: new RegExp(`^${cleanFoodName}$`, "i") }, category: "drink" });
+                                        if (!foodDoc) {
+                                            foodDoc = await Food.create({
+                                                name: toTitleCase(cleanFoodName),
+                                                image: "/assets/placeholder.png",
+                                                price: 0,
+                                                category: "drink"
+                                            });
+                                            console.log(`🥤 [Yeni İçecek Eklendi] -> ${foodDoc.name}`);
+                                        }
+                                    } else {
+                                        console.log(`⚠️ Yemek tanınmıyor ve kaydedilmiyor: ${cleanFoodName}`);
+                                        hasInvalidFood = true;
+                                        invalidFoodNames.push(toTitleCase(foodName));
+                                        continue;
+                                    }
                                 }
 
                                 if (foodDoc) {
                                     // ARKA PLAN DOĞRULAMA: Gemini'ye güvenme, veritabanındaki menü ID'leri ile kıyasla
                                     const actuallyInMenu = todayMenuFoodIds.has(foodDoc._id.toString());
-                                    const finalIsOffMenu = !actuallyInMenu;
+                                    const isDrink = foodDoc.category === "drink";
+                                    const finalIsOffMenu = !actuallyInMenu && !isDrink;
 
                                     const reason = typeof foodItem === "object" ? foodItem.reason : "Belirtilmedi";
-                                    console.log(`🔍 [Yemek Kontrol] ${foodName} -> Veritabanı Onayı: ${actuallyInMenu ? "MENÜDE ✅" : "MENÜ DIŞI ⚠️"} (AI Sebep: ${reason})`);
+                                    console.log(`🔍 [Yemek Kontrol] ${foodName} -> Veritabanı Onayı: ${actuallyInMenu ? "MENÜDE ✅" : (isDrink ? "İÇECEK 🥤" : "MENÜ DIŞI ⚠️")} (AI Sebep: ${reason})`);
 
                                     if (actuallyInMenu) hasOnMenu = true;
                                     if (finalIsOffMenu) {
                                         hasOffMenu = true;
-                                        offMenuFoodNames.push(foodDoc.name); // Veritabanındaki resmi ismi kullan
+                                        offMenuFoodNames.push(foodDoc.name);
                                     }
+                                    if (isDrink) hasOnMenu = true;
 
-                                    orderItems.push({
-                                        food: foodDoc._id,
-                                        portion: portion,
-                                        price: foodDoc.price * portion
-                                    });
+                                    // KRİTİK: Sadece menüde varsa veya içecekse sipariş listesine ekle
+                                    if (actuallyInMenu || isDrink) {
+                                        orderItems.push({
+                                            food: foodDoc._id,
+                                            portion: portion,
+                                            price: foodDoc.price * portion
+                                        });
+                                    }
                                 }
                             }
 
                             if (orderItems.length > 0) {
                                 const today = new Date().toISOString().split("T")[0];
+                                console.log(`📅 Sipariş Kaydediliyor - Tarih: ${today}`);
 
                                 const query = isActuallyGuest
                                     ? { date: today, isGuest: true, guestName: finalGuestName }
                                     : { date: today, user: matchedUser._id };
+
+                                console.log(`🔍 Kayıt Sorgusu: ${JSON.stringify(query)}`);
 
                                 await Record.findOneAndUpdate(
                                     query,
@@ -613,7 +693,7 @@ async function connectToWhatsApp() {
                                         messageId: msg.key.id || null,
                                         senderJid: sender // Siparişi veren kişinin numarası
                                     },
-                                    { upsert: true, new: true }
+                                    { upsert: true, returnDocument: "after" }
                                 );
                                 console.log(`🚀 SİPARİŞ BAŞARILI: ${isActuallyGuest ? finalGuestName + " (Misafir)" : matchedUser.firstName} adına kaydedildi!`);
                                 hasAnySuccess = true;

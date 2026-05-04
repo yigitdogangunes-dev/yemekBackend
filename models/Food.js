@@ -7,7 +7,7 @@ const foodSchema = new mongoose.Schema({
   category: { 
     type: String, 
     required: true, 
-    enum: ["soup", "mainCourse", "side", "cold", "dessert"] 
+    enum: ["soup", "mainCourse", "side", "cold", "dessert", "drink"] 
   },
   status: {
     type: String,
