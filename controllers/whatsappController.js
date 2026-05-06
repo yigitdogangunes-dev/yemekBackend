@@ -20,6 +20,7 @@ const geminiModel = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" }
 
 const logger = pino({ level: "error" });
 
+
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState(path.join(__dirname, "../auth_info_baileys"));
     const { version } = await fetchLatestBaileysVersion();
@@ -81,8 +82,7 @@ async function connectToWhatsApp() {
         for (const update of updates) {
             const messageId = update.key.id;
 
-            // Sadece şüpheli durumu yakalamak için log
-            console.log("🔍 [DEBUG - UPDATE KANALI]:", JSON.stringify(update, null, 2));
+
             if (processedEdits.has(messageId)) continue;
 
             const getMessageText = (m) => {
@@ -162,6 +162,10 @@ async function connectToWhatsApp() {
                     processedEdits.add(messageId); // Çift okumayı önlemek için hafızaya al
                     // Bu mesaj ID'sine sahip eski kayıtları temizle
                     await Record.deleteMany({ messageId: messageId });
+
+                    // ÖNEMLİ: Orijinal ID'yi korumak için msg.key.id'yi güncelle
+                    msg.key.id = messageId;
+
                     // Yeni metni normal mesaj gibi işlemesi için msg objesini güncelle
                     msg.message = { conversation: newText };
                 } else {
@@ -174,6 +178,7 @@ async function connectToWhatsApp() {
                     if (possibleText) {
                         newText = possibleText;
                         console.log(`✏️ [DÜZENLENMİŞ MESAJ YAKALANDI - SON ÇARE] ID: ${messageId}, Metin: ${newText}`);
+                        msg.key.id = messageId; // Orijinal ID'yi buraya da aktar
                         msg.message = { conversation: newText };
                     }
                 }
@@ -235,18 +240,18 @@ async function connectToWhatsApp() {
                 const today = new Date().toISOString().split("T")[0];
                 const todayMenu = await Menu.findOne({ date: today }).populate("soup mainCourse side cold dessert");
 
-                if (command === "/komutlar" || command === "/commands") {
+                if (command === "/komutlar" || command === "/commands" || command === "/help") {
                     const helpText = `🤖 *YEMEK BOTU KOMUTLARI* 🤖\n\n` +
                         `🍴 */liste* : Bugünün yemek menüsünü gösterir.\n` +
                         `🍱 */siparisim* : Bugün verdiğiniz siparişleri listeler.\n` +
                         `❌ */iptal [İsim]* : Belirttiğiniz isme ait siparişi siler.\n` +
-                        `❓ */yardim* : Nasıl sipariş verilir? (Rehber)\n`
+                        `❓ */siparis* : Nasıl sipariş verilir? (Rehber)\n`
                         ;
                     await sock.sendMessage(sender, { text: helpText, quoted: msg });
                     return;
                 }
 
-                if (command === "/liste" || command === "/menu") {
+                if (command === "/liste" || command === "/menu" || command === "/list") {
                     if (!todayMenu) {
                         await sock.sendMessage(sender, { text: "📝 Bugün için henüz bir menü girilmemiş.", quoted: msg });
                         return;
@@ -326,7 +331,7 @@ async function connectToWhatsApp() {
                     return;
                 }
 
-                if (command === "/yardim" || command === "/help") {
+                if (command === "/siparis") {
                     const guideText = `❓ *NASIL SİPARİŞ VERİLİR?* ❓\n\n` +
                         `Botu kullanmak çok kolay! Grupta normal bir şekilde yazmanız yeterli:\n\n` +
                         `✅ *Kendi siparişiniz için:* "İsminiz ve menüden seçeceğiniz yemek adı"\n` +
