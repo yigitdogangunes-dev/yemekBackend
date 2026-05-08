@@ -247,13 +247,13 @@ async function connectToWhatsApp() {
                         `❌ */iptal [İsim]* : Belirttiğiniz isme ait siparişi siler.\n` +
                         `❓ */siparis* : Nasıl sipariş verilir? (Rehber)\n`
                         ;
-                    await sock.sendMessage(sender, { text: helpText, quoted: msg });
+                    await sock.sendMessage(sender, { text: helpText }, { quoted: msg });
                     return;
                 }
 
                 if (command === "/liste" || command === "/menu" || command === "/list") {
                     if (!todayMenu) {
-                        await sock.sendMessage(sender, { text: "📝 Bugün için henüz bir menü girilmemiş.", quoted: msg });
+                        await sock.sendMessage(sender, { text: "📝 Bugün için henüz bir menü girilmemiş." }, { quoted: msg });
                         return;
                     }
                     let menuText = `🌟 *BUGÜNÜN YEMEK MENÜSÜ* 🌟\n\n`;
@@ -263,14 +263,14 @@ async function connectToWhatsApp() {
                     if (todayMenu.cold?.length) menuText += `🥗 *Soğuklar / Salata:*\n- ${todayMenu.cold.map(f => f.name).join("\n- ")}\n\n`;
                     if (todayMenu.dessert?.length) menuText += `🍮 *Tatlı / Meyve:*\n- ${todayMenu.dessert.map(f => f.name).join("\n- ")}\n\n`;
                     menuText += `_Afiyet olsun!_ ❤️`;
-                    await sock.sendMessage(sender, { text: menuText, quoted: msg });
+                    await sock.sendMessage(sender, { text: menuText }, { quoted: msg });
                     return;
                 }
 
                 if (command === "/siparisim" || command === "/order") {
                     const myRecords = await Record.find({ date: today, senderJid: sender }).populate("user items.food");
                     if (myRecords.length === 0) {
-                        await sock.sendMessage(sender, { text: "🔍 Bugün için henüz bir siparişiniz bulunmuyor.", quoted: msg });
+                        await sock.sendMessage(sender, { text: "🔍 Bugün için henüz bir siparişiniz bulunmuyor." }, { quoted: msg });
                         return;
                     }
                     let statusText = `🍱 *BUGÜNKÜ SİPARİŞLERİNİZ* 🍱\n\n`;
@@ -285,7 +285,7 @@ async function connectToWhatsApp() {
                         });
                         statusText += `\n`;
                     });
-                    await sock.sendMessage(sender, { text: statusText, quoted: msg });
+                    await sock.sendMessage(sender, { text: statusText }, { quoted: msg });
                     return;
                 }
 
@@ -296,18 +296,27 @@ async function connectToWhatsApp() {
                     const myRecords = await Record.find({ date: today, senderJid: sender }).populate("user");
 
                     if (myRecords.length === 0) {
-                        await sock.sendMessage(sender, { text: "🔍 Bugün için iptal edilecek bir siparişiniz bulunmuyor.", quoted: msg });
+                        await sock.sendMessage(sender, { text: "🔍 Bugün için iptal edilecek bir siparişiniz bulunmuyor." }, { quoted: msg });
                         return;
                     }
 
                     if (!targetName) {
                         // İsim belirtilmemiş, mevcut siparişleri listeleyip soralım
-                        let listText = `🤔 *Hangi siparişi iptal etmek istiyorsunuz?*\n\nLütfen iptal etmek istediğiniz kişinin ismini komutun yanına yazın. Örn: */iptal ${myRecords[0].isGuest ? myRecords[0].guestName : myRecords[0].user?.firstName}*\n\n*Mevcut Siparişleriniz:*\n`;
+                        let listText = `🤔 *Hangi siparişi iptal etmek istiyorsunuz?*\n\nLütfen iptal etmek istediğiniz kişinin ismini komutun yanına yazın. Örn: */iptal ${myRecords[0].isGuest ? myRecords[0].guestName : myRecords[0].user?.firstName}*\nToplu iptal için: */iptal hepsi*\n\n*Mevcut Siparişleriniz:*\n`;
                         myRecords.forEach((rec, index) => {
                             const name = rec.isGuest ? rec.guestName : `${rec.user?.firstName} ${rec.user?.lastName || ""}`.trim();
                             listText += `${index + 1}. ${name}\n`;
                         });
-                        await sock.sendMessage(sender, { text: listText, quoted: msg });
+                        await sock.sendMessage(sender, { text: listText }, { quoted: msg });
+                        return;
+                    }
+
+                    // Toplu iptal (hepsi / all)
+                    if (targetName === "hepsi" || targetName === "all") {
+                        const recordIds = myRecords.map(r => r._id);
+                        await Record.deleteMany({ _id: { $in: recordIds } });
+                        await sock.sendMessage(sender, { react: { text: "✅", key: msg.key } });
+                        await sock.sendMessage(sender, { text: `🗑️ Bugünkü *tüm siparişleriniz (${myRecords.length} adet)* başarıyla silindi.` }, { quoted: msg });
                         return;
                     }
 
@@ -320,13 +329,13 @@ async function connectToWhatsApp() {
                             await Record.findByIdAndDelete(rec._id);
                             deleted = true;
                             await sock.sendMessage(sender, { react: { text: "✅", key: msg.key } });
-                            await sock.sendMessage(sender, { text: `🗑️ *${toTitleCase(recName)}* adına olan sipariş başarıyla silindi.`, quoted: msg });
+                            await sock.sendMessage(sender, { text: `🗑️ *${toTitleCase(recName)}* adına olan sipariş başarıyla silindi.` }, { quoted: msg });
                             break;
                         }
                     }
 
                     if (!deleted) {
-                        await sock.sendMessage(sender, { text: `❌ "${toTitleCase(targetName)}" isminde bir siparişiniz bulunamadı. Lütfen listedeki isimlerden birini yazın.`, quoted: msg });
+                        await sock.sendMessage(sender, { text: `❌ "${toTitleCase(targetName)}" isminde bir siparişiniz bulunamadı. Lütfen listedeki isimlerden birini yazın.` }, { quoted: msg });
                     }
                     return;
                 }
@@ -338,7 +347,7 @@ async function connectToWhatsApp() {
                         `👥 *Başkası/Misafir için:* "İsim ve menüden seçeceğiniz yemek adı"\n` +
                         `🔢 *Porsiyon belirtmek için:* Yemeğin yanına detay belirtebilirsiniz.Örn:"Az kuru" veya "1.5 iskender"\n\n` +
                         `⚠️ Siparişinizde menü dışı bir yemek varsa bot sizi sarı ünlem (⚠️) ile uyarır.`;
-                    await sock.sendMessage(sender, { text: guideText, quoted: msg });
+                    await sock.sendMessage(sender, { text: guideText }, { quoted: msg });
                     return;
                 }
 
@@ -385,7 +394,12 @@ async function connectToWhatsApp() {
                    - Örneğin: "fasuly", "k.fasulye", "kuru fasuly" gibi yazımları BUGÜN listesindeki "Kuru Fasulye" ile eşleştir ve o yemeğin ID'sini ata.
                    - Ancak personelin yazdığı yemek BUGÜN listesindeki hiçbir yemeğe benzemiyorsa (farklı bir yemekse), o zaman ismini değiştirme ve "isOffMenu: true" yap.
                 
-                3. GENEL: Su, ayran, soda gibi içecekleri asla atlama. Sadece saf JSON döndür.
+                3. İSİM VE MİSAFİR KURALI (ÇOK ÖNEMLİ):
+                   - Eğer kullanıcı mesajda KENDİ ismini VEYA bir MİSAFİR/BAŞKASI ismini AÇIKÇA belirtmediyse (Örn: Sadece "Mercimek", "limonata" yazdıysa):
+                     -> "userName": "", "isGuest": false, "guestName": "" YAP!
+                   - Asla kafandan "Misafir" diye bir isim uydurma veya otomatik olarak isGuest: true yapma! "isGuest: true" SADECE kişi açıkça "misafir", "arkadaş", "Ahmet için" vb. yazdığında geçerlidir.
+
+                4. GENEL: Su, ayran, soda gibi içecekleri asla atlama. Sadece saf JSON döndür.
 
                 KULLANICILAR: [${existingUserNames}]
                 BUGÜN: [${menuFoodNames}]
@@ -446,7 +460,7 @@ async function connectToWhatsApp() {
                     if (parsedData.type === "GET_MENU") {
                         console.log("📋 Menü sorgulama isteği alındı...");
                         if (!todayMenu) {
-                            await sock.sendMessage(sender, { text: "📝 Bugün için henüz bir menü girilmemiş.", quoted: msg });
+                            await sock.sendMessage(sender, { text: "📝 Bugün için henüz bir menü girilmemiş." }, { quoted: msg });
                             return;
                         }
 
@@ -469,7 +483,7 @@ async function connectToWhatsApp() {
 
                         menuText += `_Afiyet olsun!_ ❤️`;
 
-                        await sock.sendMessage(sender, { text: menuText, quoted: msg });
+                        await sock.sendMessage(sender, { text: menuText }, { quoted: msg });
                         return;
                     }
 
@@ -612,9 +626,8 @@ async function connectToWhatsApp() {
                             if (!isGuest && !userName && !guestName) {
                                 console.log("⚠️ İsimsiz sipariş denemesi, kullanıcıdan isim istenecek.");
                                 await sock.sendMessage(sender, {
-                                    text: "⚠️ Lütfen kimin adına sipariş verdiğinizi belirtin.",
-                                    quoted: msg
-                                });
+                                    text: "⚠️ Lütfen kimin adına sipariş verdiğinizi belirtin."
+                                }, { quoted: msg });
                                 return; // İşlemi tamamen durdur
                             }
 
@@ -625,9 +638,8 @@ async function connectToWhatsApp() {
                             if (isActuallyGuest && !finalGuestName) {
                                 console.log("⚠️ Misafir ismi bulunamadı, kullanıcıdan isim istenecek.");
                                 await sock.sendMessage(sender, {
-                                    text: "⚠️ Lütfen kimin adına sipariş verdiğinizi belirtin.",
-                                    quoted: msg
-                                });
+                                    text: "⚠️ Lütfen kimin adına sipariş verdiğinizi belirtin."
+                                }, { quoted: msg });
                                 return;
                             }
 
@@ -730,6 +742,14 @@ async function connectToWhatsApp() {
                                 }
 
                                 if (foodDoc) {
+                                    // PASİF (TÜKENDİ) KONTROLÜ
+                                    if (foodDoc.status === "passive") {
+                                        console.log(`⚠️ Yemek pasif (tükendi) olduğu için reddediliyor: ${foodDoc.name}`);
+                                        hasInvalidFood = true;
+                                        invalidFoodNames.push(`${foodDoc.name} (Tükendi/Kalmadı)`);
+                                        continue;
+                                    }
+
                                     // ARKA PLAN DOĞRULAMA: Gemini'ye güvenme, veritabanındaki menü ID'leri ile kıyasla
                                     const actuallyInMenu = todayMenuFoodIds.has(foodDoc._id.toString());
                                     const isDrink = foodDoc.category === "drink";
@@ -791,14 +811,14 @@ async function connectToWhatsApp() {
 
                             // Tüm sorunlu yemekleri tek bir listede birleştirelim
                             const allMissing = [...invalidFoodNames, ...offMenuFoodNames];
-                            await sock.sendMessage(sender, { text: `İstediğiniz şu yemekler bugün menüde bulunmuyor: ${allMissing.join(", ")}`, quoted: msg });
+                            await sock.sendMessage(sender, { text: `İstediğiniz şu yemekler bugün menüde bulunmuyor: ${allMissing.join(", ")}` }, { quoted: msg });
 
                         } else if (hasOffMenu || hasInvalidFood) {
                             // DURUM 2: Siparişte hem menüde olan hem de olmayan yemekler varsa (Karışık) -> ⚠️
                             await sock.sendMessage(sender, { react: { text: "⚠️", key: msg.key } });
 
                             const allMissing = [...invalidFoodNames, ...offMenuFoodNames];
-                            await sock.sendMessage(sender, { text: `Siparişinizin bir kısmını aldım ancak şu yemekler bugün menüde bulunmuyor: ${allMissing.join(", ")}`, quoted: msg });
+                            await sock.sendMessage(sender, { text: `Siparişinizin bir kısmını aldım ancak şu yemekler bugün menüde bulunmuyor: ${allMissing.join(", ")}` }, { quoted: msg });
 
                         } else {
                             // DURUM 3: Siparişteki her şey mevcut menüye tam uygunsa -> ✅
