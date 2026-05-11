@@ -1,8 +1,9 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, proto } = require("@whiskeysockets/baileys");
 const { Boom } = require("@hapi/boom");
 const pino = require("pino");
 const QRCode = require("qrcode");
 const path = require("path");
+const crypto = require("crypto");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const Food = require("../models/Food");
 const Menu = require("../models/Menu");
@@ -39,6 +40,77 @@ function cacheMessage(key, message) {
         messageCache.delete(oldestKey);
     }
     messageCache.set(key.id, message);
+}
+
+// --- MANUEL SECRET-ENCRYPTED EDIT ÇÖZÜMÜ ---
+// WhatsApp multi-device sync ile edit'leri SecretEncryptedMessage zarfı içinde
+// gönderiyor. Baileys 7.0.0-rc10 sadece poll/event yanıtlarını çözüyor; edit yok.
+//
+// Reçete (tools/decrypt-edit-lab.js ile brute-force ile bulundu, gerçek dump
+// üzerinde plaintext → proto.Message ile doğrulandı):
+//   info = origMsgId || editorLid || editorLid || "Message Edit"
+//   key  = HKDF-SHA256(messageSecret, salt=empty, info, 32)
+//   plaintext = AES-256-GCM-Decrypt(encPayload, key, iv=encIv, aad=empty)
+//   plaintext sonra proto.Message olarak decode edilir (içinde protocolMessage
+//   MESSAGE_EDIT vardır — standart edit ile aynı format).
+const EDIT_LABEL = "Message Edit";
+
+function deriveEditKey(origMsgId, editorJid, origMsgSecret) {
+    const info = Buffer.concat([
+        Buffer.from(origMsgId, "utf8"),
+        Buffer.from(editorJid, "utf8"),
+        Buffer.from(editorJid, "utf8"),
+        Buffer.from(EDIT_LABEL, "utf8")
+    ]);
+    return Buffer.from(
+        crypto.hkdfSync("sha256", origMsgSecret, Buffer.alloc(0), info, 32)
+    );
+}
+
+function aesGcmDecrypt(ciphertextWithTag, key, iv, aad) {
+    const TAG_LEN = 16;
+    if (!ciphertextWithTag || ciphertextWithTag.length < TAG_LEN) return null;
+    const ct = ciphertextWithTag.subarray(0, ciphertextWithTag.length - TAG_LEN);
+    const tag = ciphertextWithTag.subarray(ciphertextWithTag.length - TAG_LEN);
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+    if (aad) decipher.setAAD(aad);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(ct), decipher.final()]);
+}
+
+// secretEnc       = SecretEncryptedMessage proto (encPayload, encIv, targetMessageKey)
+// originalMessage = orijinal proto.Message (cache'den) — messageContextInfo.messageSecret
+// editorJid       = edit envelope'unun participant LID'i (örn: 88669683769531@lid)
+// returns { ok, plaintext?, decodedMessage?, reason? }
+function decryptSecretEncryptedEdit(secretEnc, originalMessage, editorJid) {
+    const msgSecret = originalMessage?.messageContextInfo?.messageSecret;
+    if (!msgSecret) return { ok: false, reason: "originalMessage.messageContextInfo.messageSecret yok" };
+
+    const origMsgId = secretEnc.targetMessageKey?.id;
+    if (!origMsgId) return { ok: false, reason: "targetMessageKey.id yok" };
+    if (!editorJid) return { ok: false, reason: "editorJid yok" };
+
+    const encPayload = Buffer.from(secretEnc.encPayload);
+    const encIv = Buffer.from(secretEnc.encIv);
+    const key = deriveEditKey(origMsgId, editorJid, msgSecret);
+
+    let plaintext;
+    try {
+        plaintext = aesGcmDecrypt(encPayload, key, encIv, Buffer.alloc(0));
+    } catch (e) {
+        return { ok: false, reason: `AES-GCM çözme başarısız (auth tag): ${e.message}` };
+    }
+    if (!plaintext || plaintext.length === 0) {
+        return { ok: false, reason: "plaintext boş" };
+    }
+
+    let decodedMessage;
+    try {
+        decodedMessage = proto.Message.decode(plaintext);
+    } catch (e) {
+        return { ok: false, reason: `proto.Message.decode başarısız: ${e.message}`, plaintext };
+    }
+    return { ok: true, plaintext, decodedMessage };
 }
 
 
@@ -245,22 +317,129 @@ async function connectToWhatsApp() {
 
         // --- ŞİFRELİ MESAJ (SECRET ENCRYPTED / MULTI-DEVICE SYNC) DURUMU ---
         if (msg.message?.secretEncryptedMessage) {
+            
             const sec = msg.message.secretEncryptedMessage;
             const syncType = sec.secretEncType;
             const typeLabel = syncType === 1 ? "EVENT_EDIT" : syncType === 2 ? "MESSAGE_EDIT" : `BİLİNMEYEN(${syncType})`;
             const targetId = sec.targetMessageKey?.id;
             const targetFromMe = sec.targetMessageKey?.fromMe;
             const realSender = msg.key.participant || msg.key.participantPn || msg.key.participantAlt || msg.key.remoteJid;
+            console.log("secsec:", sec);
+            
 
             console.log(`\n🔒 [ŞİFRELİ SENKRONİZASYON] Tip: ${syncType} (${typeLabel})`);
             console.log(`   ├─ Grup: ${msg.key.remoteJid}`);
             console.log(`   ├─ Gerçek Gönderen (participant): ${realSender}`);
             console.log(`   ├─ Zarf fromMe: ${msg.key.fromMe}`);
             console.log(`   ├─ Hedef mesaj ID: ${targetId} (fromMe: ${targetFromMe})`);
-            console.log(`   ├─ Bot JID: ${sock.user?.id}`);
-            console.log(`   └─ ⚠️  Baileys 7.0.0-rc10 bu formatı OTOMATİK çözmüyor. Edit kaybolabilir.`);
+            console.log(`   └─ Bot JID: ${sock.user?.id}`);
 
-            // Eğer fromMe değilse: muhtemelen başka bir cihaz/multi-device sync. Atla.
+            // MESSAGE_EDIT (Tip 2) için MANUEL ÇÖZÜM denemesi
+            if (syncType === 2 && targetId) {
+                const cached = messageCache.get(targetId);
+                if (!cached) {
+                    console.warn(`   ⚠️  Orijinal mesaj cache'de YOK (id=${targetId}). Edit çözülemez.`);
+                    return;
+                }
+
+                // --- DEBUG DUMP (opt-in via DEBUG_EDIT_DUMP=1) ---
+                // Sadece DEBUG_EDIT_DUMP env var'i set olduğunda dosyaya yazar.
+                // Aksi takdirde diskin şişmesini ve nodemon restart'larını önler.
+                if (process.env.DEBUG_EDIT_DUMP === "1") try {
+                    const fs = require("fs");
+                    const dumpsDir = path.join(__dirname, "..", "debug-dumps");
+                    if (!fs.existsSync(dumpsDir)) fs.mkdirSync(dumpsDir, { recursive: true });
+                    const ts = Date.now();
+                    const toHex = (b) => b ? Buffer.from(b).toString("hex") : null;
+                    const dump = {
+                        timestamp: new Date().toISOString(),
+                        // Botun kimliği
+                        botId: sock.user?.id || null,
+                        botLid: sock.user?.lid || null,
+                        botName: sock.user?.name || null,
+                        // SecretEncryptedMessage'ın tüm alanları
+                        secretEncryptedMessage: {
+                            secretEncType: sec.secretEncType,
+                            encPayloadHex: toHex(sec.encPayload),
+                            encPayloadLen: sec.encPayload?.length,
+                            encIvHex: toHex(sec.encIv),
+                            encIvLen: sec.encIv?.length,
+                            targetMessageKey: {
+                                id: sec.targetMessageKey?.id,
+                                remoteJid: sec.targetMessageKey?.remoteJid,
+                                fromMe: sec.targetMessageKey?.fromMe,
+                                participant: sec.targetMessageKey?.participant,
+                                participantPn: sec.targetMessageKey?.participantPn,
+                                participantAlt: sec.targetMessageKey?.participantAlt
+                            }
+                        },
+                        // Zarf mesajının key'i (edit'i yollayan)
+                        envelopeKey: {
+                            id: msg.key.id,
+                            remoteJid: msg.key.remoteJid,
+                            fromMe: msg.key.fromMe,
+                            participant: msg.key.participant,
+                            participantPn: msg.key.participantPn,
+                            participantAlt: msg.key.participantAlt
+                        },
+                        // Orijinal mesaj (cache'den) — özellikle messageContextInfo.messageSecret
+                        originalMessage: {
+                            hasMessageContextInfo: !!cached.messageContextInfo,
+                            messageSecretHex: toHex(cached.messageContextInfo?.messageSecret),
+                            messageSecretLen: cached.messageContextInfo?.messageSecret?.length,
+                            // Full proto JSON (Buffer'lar base64 olur)
+                            fullProtoJson: JSON.parse(JSON.stringify(cached, (_k, v) => {
+                                if (v && v.type === "Buffer" && Array.isArray(v.data)) {
+                                    return { __hex: Buffer.from(v.data).toString("hex") };
+                                }
+                                return v;
+                            }))
+                        }
+                    };
+                    const fname = path.join(dumpsDir, `edit-${ts}.json`);
+                    fs.writeFileSync(fname, JSON.stringify(dump, null, 2));
+                    console.log(`   📝 [DEBUG DUMP YAZILDI] ${fname}`);
+                } catch (dumpErr) {
+                    console.error(`   ⚠️  Debug dump yazılamadı:`, dumpErr.message);
+                }
+                // --- /DEBUG DUMP ---
+
+                // Editor LID = envelope'un participant'ı (örn: 88669683769531@lid)
+                // Bu, HKDF info'sunda sender ve editor olarak İKİ KEZ kullanılır
+                // (deneysel olarak bulunan WhatsApp protokol kuralı).
+                const editorJid = msg.key.participant || realSender;
+
+                console.log(`   🔓 Edit çözülüyor (editor=${editorJid})...`);
+                const result = decryptSecretEncryptedEdit(sec, cached, editorJid);
+
+                if (!result.ok) {
+                    console.warn(`   ❌ Çözüm başarısız: ${result.reason}`);
+                    return;
+                }
+
+                const decoded = result.decodedMessage;
+                console.log(`   ✅ Çözüldü! plaintext=${result.plaintext.length}B, proto tipi: ${decoded.protocolMessage ? "protocolMessage." + decoded.protocolMessage.type : Object.keys(decoded).join(",")}`);
+
+                if (processedEdits.has(targetId)) {
+                    console.log(`   ⏭️  Bu edit zaten işlenmiş, atlanıyor.`);
+                    return;
+                }
+                processedEdits.add(targetId);
+
+                // Çözülen plaintext zaten standart bir proto.Message (içinde
+                // protocolMessage.MESSAGE_EDIT). Normal upsert akışına enjekte
+                // edersek mevcut MESSAGE_EDIT handler'ı doğal olarak işler.
+                const fakeKey = {
+                    remoteJid: msg.key.remoteJid,
+                    fromMe: sec.targetMessageKey?.fromMe ?? false,
+                    id: msg.key.id,
+                    participant: editorJid
+                };
+                const fakeMsg = { key: fakeKey, message: decoded };
+                await processIncomingMessage({ messages: [fakeMsg], type: "notify" });
+                return;
+            }
+
             return;
         }
 
