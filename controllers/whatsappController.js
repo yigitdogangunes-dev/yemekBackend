@@ -332,7 +332,7 @@ async function connectToWhatsApp() {
                     if (todayMenu.mainCourse?.length) menuText += `🍛 *Ana Yemekler:*\n- ${todayMenu.mainCourse.map(f => f.name).join("\n- ")}\n\n`;
                     if (todayMenu.side?.length) menuText += `🍚 *Yardımcı Yemekler:*\n- ${todayMenu.side.map(f => f.name).join("\n- ")}\n\n`;
                     if (todayMenu.cold?.length) menuText += `🥗 *Soğuklar / Salata:*\n- ${todayMenu.cold.map(f => f.name).join("\n- ")}\n\n`;
-                    if (todayMenu.dessert?.length) menuText += `🍮 *Tatlı / Meyve:*\n- ${todayMenu.dessert.map(f => f.name).join("\n- ")}\n\n`;
+                    if (todayMenu.dessert?.length) menuText += `🍮 *Tatlılar:*\n- ${todayMenu.dessert.map(f => f.name).join("\n- ")}\n\n`;
                     menuText += `_Afiyet olsun!_ ❤️`;
                     await sock.sendMessage(sender, { text: menuText }, { quoted: msg });
                     return;
