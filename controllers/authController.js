@@ -6,11 +6,11 @@ const nodemailer = require("nodemailer");
 // E-posta göndericisini oluştur (Mailtrap veya gerçek SMTP)
 const createTransporter = () => {
   return nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: process.env.SMTP_PORT,
+    host: process.env.MAIL_HOST,
+    port: process.env.MAIL_PORT,
     auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
+      user: process.env.MAIL_USER,
+      pass: process.env.MAIL_PASS,
     },
     // Ek güvenlik ve bağlantı ayarları
     tls: {

@@ -20,6 +20,27 @@ const geminiModel = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" }
 
 const logger = pino({ level: "error" });
 
+// Edit dedup hafızası — modül seviyesinde tutuluyor ki her reconnect'te sıfırlanmasın
+// ve yeni interval birikmesin. Edit'in update+upsert iki yoldan da gelmesi durumunda
+// aynı orijinal ID ile iki kez işlenmeyi engeller.
+const processedEdits = new Set();
+setInterval(() => processedEdits.clear(), 5 * 60 * 1000);
+
+// Mesaj önbelleği — Baileys'in edit/reaction/poll için secretEncryptedMessage'i
+// ÇÖZEBİLMESİ İÇİN orijinal mesajı geri vermemiz GEREKİR. Yoksa Baileys
+// "Tip: 2" şifreli sync envelope'u açamaz ve messages.update tetiklenmez,
+// yani edit kaybolur. FIFO ile sınırlı tutuyoruz ki bellek şişmesin.
+const messageCache = new Map();
+const MAX_CACHE_SIZE = 1000;
+function cacheMessage(key, message) {
+    if (!key?.id || !message) return;
+    if (messageCache.size >= MAX_CACHE_SIZE) {
+        const oldestKey = messageCache.keys().next().value;
+        messageCache.delete(oldestKey);
+    }
+    messageCache.set(key.id, message);
+}
+
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState(path.join(__dirname, "../auth_info_baileys"));
@@ -29,7 +50,18 @@ async function connectToWhatsApp() {
         auth: state,
         logger: logger,
         version,
-        browser: ["Kodpilot", "Chrome", "1.0.0"]
+        browser: ["Kodpilot", "Chrome", "1.0.0"],
+        // KRİTİK: Baileys'in şifreli edit/reaction/poll sync mesajlarını çözebilmesi için
+        // orijinal mesajın içeriğini bu callback'ten almasını sağlıyoruz.
+        getMessage: async (key) => {
+            const cached = messageCache.get(key.id);
+            if (cached) {
+                console.log(`📦 [getMessage] Cache HIT id=${key.id} (Baileys şifre çözme isteği)`);
+                return cached;
+            }
+            console.log(`📦 [getMessage] Cache MISS id=${key.id} — edit çözülemeyebilir`);
+            return undefined;
+        }
     });
 
     sock.ev.on("creds.update", saveCreds);
@@ -66,6 +98,8 @@ async function connectToWhatsApp() {
             }
         } else if (connection === "open") {
             console.log("✅ WhatsApp bağlantısı başarıyla açıldı!");
+            console.log(`🤖 BOT KİMLİĞİ: ${sock.user?.id || "(bilinmiyor)"} | İsim: ${sock.user?.name || "(yok)"}`);
+            console.log(`   ↳ Bu numara ile sipariş gönderirseniz fromMe=true olur ve edit secretEncryptedMessage olarak gelir!`);
             connectionStatus = "Connected";
             qrCode = null;
         } else if (connection === "connecting") {
@@ -73,17 +107,19 @@ async function connectToWhatsApp() {
         }
     });
 
-    // --- MESAJ GÜNCELLEMELERİ VE ŞİFRELİ EDİTLER İÇİN HAFIZA ---
-    const processedEdits = new Set();
-    setInterval(() => processedEdits.clear(), 10000);
-
     // --- MESAJ GÜNCELLEMELERİNİ (EDIT) DİNLE ---
     sock.ev.on("messages.update", async (updates) => {
         for (const update of updates) {
             const messageId = update.key.id;
+            const remoteJid = update.key.remoteJid;
 
+            console.log(`\n🔔 [messages.update] ID: ${messageId} | Grup: ${remoteJid}`);
+            console.log(`   └─ update.update payload:`, JSON.stringify(update.update, null, 2));
 
-            if (processedEdits.has(messageId)) continue;
+            if (processedEdits.has(messageId)) {
+                console.log(`   ⏭️  Zaten işlenmiş (dedup), atlanıyor.`);
+                continue;
+            }
 
             const getMessageText = (m) => {
                 if (!m) return "";
@@ -92,40 +128,64 @@ async function connectToWhatsApp() {
             };
 
             let newText = "";
+            let extractionPath = "none";
             const upd = update.update;
 
             // İhtimal 1: Standart protokol mesajı (update.message.protocolMessage)
             if (upd?.message?.protocolMessage?.type === 14 || upd?.message?.protocolMessage?.type === "MESSAGE_EDIT") {
                 newText = getMessageText(upd.message.protocolMessage.editedMessage);
+                extractionPath = "update.message.protocolMessage.editedMessage";
             }
             // İhtimal 2: Baileys'in şifre çözdükten sonra en üste koyduğu hal (update.editedMessage)
             else if (upd?.editedMessage) {
                 newText = getMessageText(upd.editedMessage);
+                extractionPath = "update.editedMessage";
             }
             // İhtimal 3: Mesaj gövdesinde doğrudan edit bilgisi (update.message.editedMessage)
             else if (upd?.message?.editedMessage) {
                 newText = getMessageText(upd.message.editedMessage);
+                extractionPath = "update.message.editedMessage";
             }
 
             if (newText) {
                 processedEdits.add(messageId);
-                console.log(`✏️ [DÜZENLENMİŞ MESAJ YAKALANDI - UPDATE] ID: ${messageId}, Yeni Metin: ${newText}`);
+                console.log(`✏️  [EDIT YAKALANDI - UPDATE] ID: ${messageId} | Yol: ${extractionPath} | Yeni Metin: "${newText}"`);
                 const fakeMsg = { key: update.key, message: { conversation: newText } };
                 processIncomingMessage({ messages: [fakeMsg], type: "notify" });
+            } else if (upd?.message || upd?.editedMessage) {
+                console.warn(`   ⚠️  [EDIT METNİ ÇIKARILAMADI - UPDATE] ID: ${messageId}. Hiçbir yol uymadı, yukarıdaki payload'u inceleyin.`);
+            } else {
+                console.log(`   ℹ️  Edit değil (status/receipt güncellemesi), atlanıyor.`);
             }
         }
     });
 
     // --- GELEN MESAJLARI DİNLE (YENİ, SİLİNEN VE DÜZENLENEN TÜM MESAJLAR BURADAN GEÇER) ---
     sock.ev.on("messages.upsert", async (m) => {
+        // Baileys'in ileride edit/reaction çözebilmesi için tüm normal mesajları önbelleğe al
+        for (const cacheCandidate of (m.messages || [])) {
+            // Protocol/secret envelope'ları cache'leme, sadece gerçek içerikli mesajları al
+            const hasRealContent = cacheCandidate.message
+                && !cacheCandidate.message.protocolMessage
+                && !cacheCandidate.message.secretEncryptedMessage;
+            if (hasRealContent) {
+                cacheMessage(cacheCandidate.key, cacheCandidate.message);
+            }
+        }
+
         const msg = m.messages[0];
         if (!msg) return;
 
-        const messageId = msg.key?.id;
-
-        // Eğer bu bir edit/protocol mesajı ise
-        if (msg.message?.protocolMessage?.type === 14 || msg.message?.protocolMessage?.type === "MESSAGE_EDIT") {
-            if (processedEdits.has(messageId)) return;
+        // Edit protokol mesajları için dedup: ZARF id'sini değil, ORİJİNAL mesaj id'sini kullan
+        // (messages.update handler'ı orijinal id ile işaretliyor, eşleşmesi gerekiyor)
+        const protocolMsg = msg.message?.protocolMessage;
+        if (protocolMsg?.type === 14 || protocolMsg?.type === "MESSAGE_EDIT") {
+            const originalId = protocolMsg.key?.id;
+            console.log(`\n🔔 [messages.upsert - EDIT PROTOCOL] Zarf ID: ${msg.key?.id} | Orijinal ID: ${originalId}`);
+            if (originalId && processedEdits.has(originalId)) {
+                console.log(`   ⏭️  Bu edit messages.update tarafından zaten işlendi, atlanıyor.`);
+                return;
+            }
         }
 
         processIncomingMessage(m);
@@ -154,51 +214,62 @@ async function connectToWhatsApp() {
             // 14 = EDIT (Mesaj düzenlendi)
             if (protocolMsg.type === 14 || protocolMsg.type === "MESSAGE_EDIT") {
                 const editedContent = protocolMsg.editedMessage;
-                const newText = editedContent?.conversation || editedContent?.extendedTextMessage?.text ||
-                    editedContent?.message?.conversation || editedContent?.message?.extendedTextMessage?.text;
+
+                console.log(`\n✏️  [EDIT - UPSERT işleniyor] Orijinal ID: ${messageId} | Zarf ID: ${msg.key?.id}`);
+                console.log(`   └─ protocolMessage.editedMessage:`, JSON.stringify(editedContent, null, 2));
+
+                // Tüm bilinen yolları tek bir let zincirinde dene
+                let newText = editedContent?.conversation
+                    || editedContent?.extendedTextMessage?.text
+                    || editedContent?.message?.conversation
+                    || editedContent?.message?.extendedTextMessage?.text
+                    || msg.message?.editedMessage?.message?.conversation
+                    || msg.message?.editedMessage?.conversation
+                    || msg.message?.editMessage?.text
+                    || msg.message?.text
+                    || "";
 
                 if (newText) {
-                    console.log(`✏️ [DÜZENLENMİŞ MESAJ YAKALANDI - UPSERT] ID: ${messageId}, Yeni Metin: ${newText}`);
-                    processedEdits.add(messageId); // Çift okumayı önlemek için hafızaya al
-                    // Bu mesaj ID'sine sahip eski kayıtları temizle
+                    console.log(`   ✅ Yeni metin: "${newText}"`);
+                    processedEdits.add(messageId); // Çift okumayı önlemek için orijinal ID ile işaretle
                     await Record.deleteMany({ messageId: messageId });
-
-                    // ÖNEMLİ: Orijinal ID'yi korumak için msg.key.id'yi güncelle
-                    msg.key.id = messageId;
-
-                    // Yeni metni normal mesaj gibi işlemesi için msg objesini güncelle
+                    msg.key.id = messageId; // Orijinal ID'yi koru
                     msg.message = { conversation: newText };
                 } else {
-                    // SON ÇARE: Eğer metin hala bulunamadıysa, mesajın içindeki her köşeye bak
-                    const possibleText = msg.message?.editedMessage?.message?.conversation ||
-                        msg.message?.editedMessage?.conversation ||
-                        msg.message?.protocolMessage?.editedMessage?.conversation ||
-                        msg.message?.editMessage?.text ||
-                        msg.message?.text;
-                    if (possibleText) {
-                        newText = possibleText;
-                        console.log(`✏️ [DÜZENLENMİŞ MESAJ YAKALANDI - SON ÇARE] ID: ${messageId}, Metin: ${newText}`);
-                        msg.key.id = messageId; // Orijinal ID'yi buraya da aktar
-                        msg.message = { conversation: newText };
-                    }
+                    // Çıkarılamadıysa: hayalet kayıt oluşmasın diye devam etme
+                    console.warn(`   ⚠️  EDIT metni hiçbir yoldan çıkarılamadı. msg.message dump:`, JSON.stringify(msg.message, null, 2));
+                    return;
                 }
             }
         }
 
         // --- ŞİFRELİ MESAJ (SECRET ENCRYPTED / MULTI-DEVICE SYNC) DURUMU ---
         if (msg.message?.secretEncryptedMessage) {
-            const syncType = msg.message.secretEncryptedMessage.secretEncType;
-            console.log(`🔒 [ŞİFRELİ SENKRONİZASYON] Tip: ${syncType}, Sahibi tarafından düzenleme yapıldı. Arka kapı (update) bekleniyor...`);
+            const sec = msg.message.secretEncryptedMessage;
+            const syncType = sec.secretEncType;
+            const typeLabel = syncType === 1 ? "EVENT_EDIT" : syncType === 2 ? "MESSAGE_EDIT" : `BİLİNMEYEN(${syncType})`;
+            const targetId = sec.targetMessageKey?.id;
+            const targetFromMe = sec.targetMessageKey?.fromMe;
+            const realSender = msg.key.participant || msg.key.participantPn || msg.key.participantAlt || msg.key.remoteJid;
 
-            // Eğer bu bir düzenleme ise, Baileys'e bu mesajı çözmesi için bir şans verelim (Update tetiklenebilir)
+            console.log(`\n🔒 [ŞİFRELİ SENKRONİZASYON] Tip: ${syncType} (${typeLabel})`);
+            console.log(`   ├─ Grup: ${msg.key.remoteJid}`);
+            console.log(`   ├─ Gerçek Gönderen (participant): ${realSender}`);
+            console.log(`   ├─ Zarf fromMe: ${msg.key.fromMe}`);
+            console.log(`   ├─ Hedef mesaj ID: ${targetId} (fromMe: ${targetFromMe})`);
+            console.log(`   ├─ Bot JID: ${sock.user?.id}`);
+            console.log(`   └─ ⚠️  Baileys 7.0.0-rc10 bu formatı OTOMATİK çözmüyor. Edit kaybolabilir.`);
+
+            // Eğer fromMe değilse: muhtemelen başka bir cihaz/multi-device sync. Atla.
             return;
         }
 
         const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.buttonsResponseMessage?.selectedButtonId || msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId;
         const sender = msg.key.remoteJid;
         const isMe = msg.key.fromMe;
+        const participant = msg.key.participant || msg.key.participantPn || msg.key.participantAlt;
 
-        console.log(`📩 Mesaj Yakalandı! Gönderen: ${sender}, Tip: ${m.type}, Kendi Mesajım mı: ${isMe}`);
+        console.log(`📩 Mesaj Yakalandı! Grup: ${sender} | Gerçek Gönderen: ${participant || "(birebir sohbet)"} | Tip: ${m.type} | fromMe: ${isMe} | Bot JID: ${sock.user?.id}`);
 
         // AKILLI LOOP ÖNLEYİCİ: Botun kendi otomatik cevaplarını analiz etmeyelim ama kullanıcının test mesajlarına izin verelim
         const botReplyPatterns = [
