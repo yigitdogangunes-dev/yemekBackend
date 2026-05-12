@@ -58,3 +58,16 @@ exports.createFood = async (req, res) => {
     res.status(400).json({ message: "Yemek eklenemedi", error: error.message });
   }
 };
+
+// Yemek sil (Admin - Hard Delete)
+exports.deleteFood = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const food = await Food.findByIdAndDelete(id);
+    if (!food) return res.status(404).json({ message: "Yemek bulunamadı." });
+    res.json({ message: "Yemek silindi.", id });
+  } catch (error) {
+    console.error("Yemek silinirken hata:", error);
+    res.status(500).json({ message: "Silme başarısız", error: error.message });
+  }
+};
