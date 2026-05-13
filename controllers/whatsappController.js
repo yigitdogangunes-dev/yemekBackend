@@ -317,7 +317,7 @@ async function connectToWhatsApp() {
 
         // --- ŞİFRELİ MESAJ (SECRET ENCRYPTED / MULTI-DEVICE SYNC) DURUMU ---
         if (msg.message?.secretEncryptedMessage) {
-            
+
             const sec = msg.message.secretEncryptedMessage;
             const syncType = sec.secretEncType;
             const typeLabel = syncType === 1 ? "EVENT_EDIT" : syncType === 2 ? "MESSAGE_EDIT" : `BİLİNMEYEN(${syncType})`;
@@ -325,7 +325,7 @@ async function connectToWhatsApp() {
             const targetFromMe = sec.targetMessageKey?.fromMe;
             const realSender = msg.key.participant || msg.key.participantPn || msg.key.participantAlt || msg.key.remoteJid;
             console.log("secsec:", sec);
-            
+
 
             console.log(`\n🔒 [ŞİFRELİ SENKRONİZASYON] Tip: ${syncType} (${typeLabel})`);
             console.log(`   ├─ Grup: ${msg.key.remoteJid}`);
@@ -448,6 +448,8 @@ async function connectToWhatsApp() {
         const isMe = msg.key.fromMe;
         const participant = msg.key.participant || msg.key.participantPn || msg.key.participantAlt;
 
+        if (isMe) return;
+
         console.log(`📩 Mesaj Yakalandı! Grup: ${sender} | Gerçek Gönderen: ${participant || "(birebir sohbet)"} | Tip: ${m.type} | fromMe: ${isMe} | Bot JID: ${sock.user?.id}`);
 
         // AKILLI LOOP ÖNLEYİCİ: Botun kendi otomatik cevaplarını analiz etmeyelim ama kullanıcının test mesajlarına izin verelim
@@ -462,7 +464,10 @@ async function connectToWhatsApp() {
             "sipariş başarıyla silindi",
             "siparişiniz bulunmuyor",
             "menü girilmemiş",
-            "siparişiniz bulunmadı"
+            "siparişiniz bulunmadı",
+            "Siparişten kaldırıldı",
+            "Siparişte bulunamadı",
+            "için otomatik sipariş verildi"
         ];
         const isBotReply = text && botReplyPatterns.some(pattern => text.includes(pattern));
         if (isBotReply) {
@@ -474,6 +479,8 @@ async function connectToWhatsApp() {
 
         if (text && sender === targetGroup) {
             console.log(`💬 Hedef Gruptan Mesaj Geldi: ${text}`);
+
+            const today = new Date().toISOString().split("T")[0];
 
             // Türkçe karakter uyumlu Baş Harf Büyütme (Tüm komutlar için)
             const toTitleCase = (str) => {
@@ -487,7 +494,6 @@ async function connectToWhatsApp() {
             // --- '/' KOMUT İŞLEYİCİ (HARD-CODED COMMANDS) ---
             if (text.startsWith("/")) {
                 const command = text.split(" ")[0].toLowerCase();
-                const today = new Date().toISOString().split("T")[0];
                 const todayMenu = await Menu.findOne({ date: today }).populate("soup mainCourse side cold dessert");
 
                 if (command === "/komutlar" || command === "/commands" || command === "/help") {
@@ -495,6 +501,7 @@ async function connectToWhatsApp() {
                         `🍴 */liste* : Bugünün yemek menüsünü gösterir.\n` +
                         `🍱 */siparisim* : Bugün verdiğiniz siparişleri listeler.\n` +
                         `❌ */iptal [İsim]* : Belirttiğiniz isme ait siparişi siler.\n` +
+                        `🤖 */oneri [İsim]* : Geçmişe göre otomatik sipariş verir. Örn: /oneri Yiğit\n` +
                         `❓ */siparis* : Nasıl sipariş verilir? (Rehber)\n`
                         ;
                     await sock.sendMessage(sender, { text: helpText }, { quoted: msg });
@@ -601,8 +608,298 @@ async function connectToWhatsApp() {
                     return;
                 }
 
+                if (command === "/oneri" || command === "/recommend") {
+                    // 1. Komuttan isim al: "/oneri Yiğit" → "yiğit"
+                    const nameArg = text.split(" ").slice(1).join(" ").trim().toLowerCase();
+
+                    if (!nameArg) {
+                        await sock.sendMessage(sender, {
+                            text: "ℹKullanım: */oneri [İsim]*\n*"
+                        }, { quoted: msg });
+                        return;
+                    }
+
+                    // 2. Veritabanında isim araması (firstName veya lastName ile eşleşsin)
+                    const allUsers = await User.find({ status: "active" });
+                    const matchedUser = allUsers.find(u => {
+                        const fullName = `${u.firstName || ""} ${u.lastName || ""}`.toLowerCase();
+                        return fullName.includes(nameArg) || nameArg.includes((u.firstName || "").toLowerCase());
+                    });
+
+                    if (!matchedUser) {
+                        await sock.sendMessage(sender, {
+                            text: `❌ "${toTitleCase(nameArg)}" adında kayıtlı bir kullanıcı bulunamadı.`
+                        }, { quoted: msg });
+                        return;
+                    }
+
+                    // 2. Bugün zaten siparişi var mı?
+                    const existingOrder = await Record.findOne({ date: today, user: matchedUser._id });
+                    if (existingOrder) {
+                        await Record.findOne({ date: today, user: matchedUser._id }).populate("items.food");
+                        const existingPopulated = await Record.findOne({ date: today, user: matchedUser._id }).populate("items.food");
+                        const itemList = existingPopulated.items.map(i => `- ${i.food?.name}`).join("\n");
+                        await sock.sendMessage(sender, {
+                            text: `ℹ️ Bugün zaten bir siparişin var:\n${itemList}\n\nDeğiştirmek istersen */iptal hepsi* yaz, ardından */onerim* tekrar dene.`
+                        }, { quoted: msg });
+                        return;
+                    }
+
+                    // 3. Bugünün menüsü var mı?
+                    if (!todayMenu) {
+                        await sock.sendMessage(sender, { text: "📝 Bugün için henüz bir menü girilmemiş, öneri yapılamıyor." }, { quoted: msg });
+                        return;
+                    }
+
+                    // 4. Son 7 günün siparişlerini çek ve frekans hesapla
+                    const sevenDaysAgo = new Date();
+                    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+                    const sevenDaysAgoStr = sevenDaysAgo.toISOString().split("T")[0];
+
+                    const pastRecords = await Record.find({
+                        user: matchedUser._id,
+                        date: { $gte: sevenDaysAgoStr, $lt: today }
+                    }).populate("items.food");
+
+                    const totalDays = pastRecords.length; // kaç farklı günde sipariş var
+
+                    // Kategori frekansı: o kategoriden kaç günde sipariş var
+                    const categoryDays = { soup: 0, mainCourse: 0, side: 0, cold: 0, dessert: 0, drink: 0 };
+                    // Yemek frekansı: hangi yemek kaç kez seçilmiş
+                    const foodFreq = {};
+
+                    for (const rec of pastRecords) {
+                        const categoriesThisDay = new Set();
+                        for (const item of rec.items) {
+                            if (!item.food) continue;
+                            const cat = item.food.category;
+                            categoriesThisDay.add(cat);
+                            const name = item.food.name;
+                            foodFreq[name] = (foodFreq[name] || 0) + 1;
+                        }
+                        for (const cat of categoriesThisDay) {
+                            if (categoryDays[cat] !== undefined) categoryDays[cat]++;
+                        }
+                    }
+
+                    // Frekans eşikleri: kaç günden fazlaysa o kategori dahil edilir
+                    // Ana yemek her zaman dahil (eşik = 0)
+                    const THRESHOLDS = {
+                        soup: totalDays > 0 ? Math.ceil(totalDays * 0.5) : 0,
+                        mainCourse: 0,
+                        side: totalDays > 0 ? Math.ceil(totalDays * 0.5) : 0,
+                        cold: totalDays > 0 ? Math.ceil(totalDays * 0.4) : 0,
+                        dessert: totalDays > 0 ? Math.ceil(totalDays * 0.5) : 0,
+                        drink: totalDays > 0 ? Math.ceil(totalDays * 0.5) : 0,
+                    };
+
+                    const activeCategories = Object.entries(THRESHOLDS)
+                        .filter(([cat, threshold]) => categoryDays[cat] >= threshold || cat === "mainCourse")
+                        .map(([cat]) => cat);
+
+                    // 5. Menüden uygun yemekleri hazırla (sadece aktif kategoriler)
+                    const menuByCategory = {
+                        soup: (todayMenu.soup || []).filter(f => f.status !== "passive"),
+                        mainCourse: (todayMenu.mainCourse || []).filter(f => f.status !== "passive"),
+                        side: (todayMenu.side || []).filter(f => f.status !== "passive"),
+                        cold: (todayMenu.cold || []).filter(f => f.status !== "passive"),
+                        dessert: (todayMenu.dessert || []).filter(f => f.status !== "passive"),
+                    };
+
+                    // İçecekler menüde değil, DB'den çek
+                    const allDrinks = await Food.find({ category: "drink", status: "active" });
+
+                    // 6. Gemini prompt'u oluştur
+                    const freqLines = Object.entries(categoryDays)
+                        .map(([cat, days]) => `  ${cat}: ${days}/${totalDays || 0} gün`)
+                        .join("\n");
+
+                    const topFoods = Object.entries(foodFreq)
+                        .sort((a, b) => b[1] - a[1])
+                        .slice(0, 8)
+                        .map(([name, cnt]) => `  ${name} × ${cnt}`)
+                        .join("\n");
+
+                    const menuLines = activeCategories
+                        .filter(cat => cat !== "drink")
+                        .flatMap(cat => (menuByCategory[cat] || []).map(f => `  [${f._id}] ${f.name} (${cat})`))
+                        .join("\n");
+
+                    const drinkLines = activeCategories.includes("drink") && allDrinks.length > 0
+                        ? allDrinks.map(d => `  [${d._id}] ${d.name}`).join("\n")
+                        : "";
+
+                    const noHistoryNote = totalDays === 0
+                        ? "Kullanıcının geçmişi yok. Dengeli ve standart bir seçim yap."
+                        : "";
+
+                    const recommendPrompt = `Sen bir yemek öneri sistemisin. Kullanıcının geçmişine göre bugünkü menüden sipariş seç.
+
+${noHistoryNote}
+Kategori frekansları (kaç günde o kategoriden sipariş verdiler):
+${freqLines}
+
+En sık tercih ettiği yemekler:
+${topFoods || "  (veri yok)"}
+
+Dahil edilmesi gereken kategoriler: ${activeCategories.join(", ")}
+(Bu listede olmayan kategorilerden seçim yapma!)
+
+Bugünkü menü seçenekleri:
+${menuLines || "  (yok)"}
+${drinkLines ? `\nİçecekler (DB'den):\n${drinkLines}` : ""}
+
+Görev:
+- Dahil edilmesi gereken her kategoriden EN FAZLA 1 seçim yap
+- Geçmişteki tercihlere benzer yemekleri öncelikle seç
+- Sadece saf JSON döndür, başka bir şey yazma:
+{"items": [{"id": "...", "portion": 1}, ...]}`;
+
+                    console.log(" [/oneri] Gemini öneri hesaplıyor...");
+                    const recResult = await geminiModel.generateContent(recommendPrompt);
+                    const recText = recResult.response.text().trim();
+                    console.log(" [/oneri] Gemini Cevabı:", recText);
+
+                    let recommendedItems;
+                    try {
+                        const cleanJson = recText.replace(/```json|```/g, "").trim();
+                        recommendedItems = JSON.parse(cleanJson).items;
+                        if (!Array.isArray(recommendedItems) || recommendedItems.length === 0) throw new Error("Boş liste");
+                    } catch (e) {
+                        console.error("[/oneri] JSON parse hatası:", e.message);
+                        await sock.sendMessage(sender, { text: "⚠️ Öneri oluşturulamadı, lütfen tekrar dene." }, { quoted: msg });
+                        return;
+                    }
+
+                    // 7. ID'leri doğrula ve Record oluştur
+                    const orderItems = [];
+                    const foodNames = [];
+                    for (const item of recommendedItems) {
+                        if (!item.id || !mongoose.Types.ObjectId.isValid(item.id)) continue;
+                        const foodDoc = await Food.findById(item.id);
+                        if (!foodDoc) continue;
+                        orderItems.push({ food: foodDoc._id, portion: item.portion || 1, price: foodDoc.price * (item.portion || 1) });
+                        const emoji = { soup: "", mainCourse: "", side: "", cold: "", dessert: "", drink: "" }[foodDoc.category] || "";
+                        foodNames.push(`${emoji} ${foodDoc.name}`);
+                    }
+
+                    if (orderItems.length === 0) {
+                        await sock.sendMessage(sender, { text: "⚠️ Öneri için uygun yemek bulunamadı." }, { quoted: msg });
+                        return;
+                    }
+
+                    await Record.create({
+                        date: today,
+                        user: matchedUser._id,
+                        isGuest: false,
+                        guestName: "",
+                        items: orderItems,
+                        senderJid: sender
+                    });
+
+                    await sock.sendMessage(sender, { react: { text: "✅", key: msg.key } });
+                    await sock.sendMessage(sender, {
+                        text: `*${matchedUser.firstName} için otomatik sipariş verildi!*\n\n${foodNames.join("\n")}`
+                    }, { quoted: msg });
+                    return;
+                }
+
                 // Eğer komut bulunamadıysa (yanlış yazıldıysa) yine de dur, Gemini'ye gönderme
                 return;
+            }
+
+            // --- ALINTILANMIŞ MESAJ: EKSİK ÜRÜN BİLDİRİMİ ---
+            // Kullanıcı kendi mesajını alıntılayıp "kola gelmedi" gibi bir şey yazdıysa
+            const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+            const quotedText = contextInfo?.quotedMessage?.conversation
+                || contextInfo?.quotedMessage?.extendedTextMessage?.text;
+            const quotedSender = contextInfo?.participant || contextInfo?.remoteJid;
+            const realSenderJid = msg.key.participant || sender;
+
+            if (quotedText && quotedSender && quotedSender.split(":")[0] === realSenderJid.split(":")[0]) {
+                // Alıntılanan mesaj kendi mesajıysa, Gemini'ye eksiklik bildirimi mi diye sor
+                const missingPrompt = `Aşağıda bir WhatsApp grubundaki iki mesaj var.
+
+ALINTILAMIŞ MESAJ (Kullanıcının kendi sipariş mesajı):
+"${quotedText}"
+
+YENİ MESAJ:
+"${text}"
+
+Soru: Yeni mesaj, alıntılanan siparişteki bir veya birden fazla ürünün eksik geldiğini bildiriyor mu?
+
+Eğer evet:
+- "personName": Alıntılanan mesajdaki kişi ismi (örn: "Ali"). Eğer isim yoksa null yaz.
+- "items": Gelmediği belirtilen ürünlerin listesi (alıntılanan mesajdaki yazıma yakın isimlerle)
+
+{"type": "MISSING_ITEM", "personName": "Ali", "items": ["Kola", "Pilav"]}
+
+Eğer hayır:
+{"type": "IGNORE"}
+
+Sadece JSON döndür.`;
+
+                const missingResult = await geminiModel.generateContent(missingPrompt);
+                const missingText = missingResult.response.text().trim();
+                console.log("🔍 [Eksik Ürün Kontrol] Gemini:", missingText);
+
+                let parsed;
+                try {
+                    parsed = JSON.parse(missingText.replace(/```json|```/g, "").trim());
+                } catch { parsed = { type: "IGNORE" }; }
+
+                if (parsed.type === "MISSING_ITEM" && Array.isArray(parsed.items) && parsed.items.length > 0) {
+                    // Bugün bu numaradan verilen tüm siparişleri bul
+                    const todayRecords = await Record.find({ date: today, senderJid: sender }).populate("items.food");
+
+                    const removedItems = [];
+                    const notFoundItems = [];
+
+                    for (const itemName of parsed.items) {
+                        const nameLower = itemName.toLowerCase().trim();
+                        let removed = false;
+
+                        for (const record of todayRecords) {
+                            // personName varsa o isimle eşleş, yoksa tüm kayıtlara bak
+                            if (parsed.personName) {
+                                const recName = (record.isGuest
+                                    ? record.guestName
+                                    : `${record.user?.firstName || ""}`).toLowerCase();
+                                if (!recName.includes(parsed.personName.toLowerCase())) continue;
+                            }
+
+                            const matchIdx = record.items.findIndex(i =>
+                                i.food?.name?.toLowerCase().includes(nameLower) ||
+                                nameLower.includes(i.food?.name?.toLowerCase())
+                            );
+
+                            if (matchIdx !== -1) {
+                                const foodName = record.items[matchIdx].food?.name;
+                                record.items.splice(matchIdx, 1);
+                                await record.save();
+                                removedItems.push(foodName);
+                                removed = true;
+                                break;
+                            }
+                        }
+
+                        if (!removed) notFoundItems.push(itemName);
+                    }
+
+                    let replyText = "";
+                    if (removedItems.length > 0) {
+                        replyText += `Siparişten kaldırıldı: ${removedItems.join(", ")}`;
+                    }
+                    if (notFoundItems.length > 0) {
+                        replyText += `\nSiparişte bulunamadı: ${notFoundItems.join(", ")}`;
+                    }
+
+                    if (replyText) {
+                        await sock.sendMessage(sender, { text: replyText.trim() }, { quoted: msg });
+                    }
+                    return;
+                }
+                // IGNORE ise normal akışa devam et (fall-through)
             }
 
             try {
@@ -616,8 +913,7 @@ async function connectToWhatsApp() {
                 const existingUsers = await User.find({});
                 const existingUserNames = existingUsers.map(u => u.lastName ? `${u.firstName} ${u.lastName}` : u.firstName).join(", ");
 
-                const todayStr = new Date().toISOString().split("T")[0];
-                const todayMenu = await Menu.findOne({ date: todayStr }).populate("soup mainCourse side cold dessert");
+                const todayMenu = await Menu.findOne({ date: today }).populate("soup mainCourse side cold dessert");
 
                 let menuFoodNames = "Menü henüz girilmemiş";
                 if (todayMenu) {
@@ -695,7 +991,14 @@ async function connectToWhatsApp() {
                   ]
                 }
 
-                3. EĞER metin bir sipariş veya menü değilse (sohbet, teşekkür, geribildirim, selamlaşma veya alakasız bir mesajsa), type: "IGNORE" döndür.
+                3. EĞER mesaj, daha önce verilmiş bir siparişten bir veya birden fazla ürünün GELMEDIĞINI bildiriyorsa (örn: "gazoz gelmedi", "pilav eksikti", "kolayı kaldır", "X'in çorbası gelmemiş"), type: "MISSING_ITEM" döndür.
+                   - "personName": Mesajda geçen kişi adı (örn: "Ali"). Mesaj kişi adı içermiyorsa null yaz.
+                   - "items": Gelmediği belirtilen ürünlerin listesi.
+                   Format: {"type": "MISSING_ITEM", "personName": "Ali", "items": ["Gazoz", "Pilav"]}
+
+                4. ÖNEMLİ: Eğer mesaj bir botun onay mesajı ise (örn: "Siparişten kaldırıldı:", "Siparişte bulunamadı:", "sipariş verildi") veya bu tür sistem mesajlarını içeriyorsa, type: "IGNORE" döndür.
+
+                5. EĞER metin bir sipariş veya menü değilse (sohbet, teşekkür, geribildirim, selamlaşma veya alakasız bir mesajsa), type: "IGNORE" döndür.
 
                 Sadece saf JSON döndür, kod blokları ( \`\`\` ) kullanma.
 
@@ -708,6 +1011,42 @@ async function connectToWhatsApp() {
                 try {
                     const cleanJson = responseText.replace(/```json|```/g, "").trim();
                     const parsedData = JSON.parse(cleanJson);
+
+                    if (parsedData.type === "MISSING_ITEM" && Array.isArray(parsedData.items) && parsedData.items.length > 0) {
+                        const todayRecords = await Record.find({ date: today, senderJid: sender }).populate("items.food");
+                        const removedItems = [];
+                        const notFoundItems = [];
+
+                        for (const itemName of parsedData.items) {
+                            const nameLower = itemName.toLowerCase().trim();
+                            let removed = false;
+
+                            for (const record of todayRecords) {
+                                if (parsedData.personName) {
+                                    const recName = (record.isGuest ? record.guestName : record.user?.firstName || "").toLowerCase();
+                                    if (!recName.includes(parsedData.personName.toLowerCase())) continue;
+                                }
+                                const matchIdx = record.items.findIndex(i =>
+                                    i.food?.name?.toLowerCase().includes(nameLower) ||
+                                    nameLower.includes(i.food?.name?.toLowerCase())
+                                );
+                                if (matchIdx !== -1) {
+                                    removedItems.push(record.items[matchIdx].food?.name);
+                                    record.items.splice(matchIdx, 1);
+                                    await record.save();
+                                    removed = true;
+                                    break;
+                                }
+                            }
+                            if (!removed) notFoundItems.push(itemName);
+                        }
+
+                        let replyText = "";
+                        if (removedItems.length > 0) replyText += `Siparişten kaldırıldı: ${removedItems.join(", ")}`;
+                        if (notFoundItems.length > 0) replyText += `\nSiparişte bulunamadı: ${notFoundItems.join(", ")}`;
+                        if (replyText) await sock.sendMessage(sender, { text: replyText.trim() }, { quoted: msg });
+                        return;
+                    }
 
                     if (parsedData.type === "GET_MENU") {
                         console.log("📋 Menü sorgulama isteği alındı...");
@@ -728,10 +1067,10 @@ async function connectToWhatsApp() {
                             menuText += `🍚 *Yardımcı Yemekler:*\n- ${todayMenu.side.map(f => f.name).join("\n- ")}\n\n`;
 
                         if (todayMenu.cold?.length)
-                            menuText += `🥗 *Soğuklar / Salata:*\n- ${todayMenu.cold.map(f => f.name).join("\n- ")}\n\n`;
+                            menuText += `🥗 *Soğuklar*\n- ${todayMenu.cold.map(f => f.name).join("\n- ")}\n\n`;
 
                         if (todayMenu.dessert?.length)
-                            menuText += `🍮 *Tatlı / Meyve:*\n- ${todayMenu.dessert.map(f => f.name).join("\n- ")}\n\n`;
+                            menuText += `🍮 *Tatlılar*\n- ${todayMenu.dessert.map(f => f.name).join("\n- ")}\n\n`;
 
                         menuText += `_Afiyet olsun!_ ❤️`;
 
