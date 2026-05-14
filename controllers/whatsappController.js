@@ -497,12 +497,12 @@ async function connectToWhatsApp() {
                 const todayMenu = await Menu.findOne({ date: today }).populate("soup mainCourse side cold dessert");
 
                 if (command === "/komutlar" || command === "/commands" || command === "/help") {
-                    const helpText = `🤖 *YEMEK BOTU KOMUTLARI* 🤖\n\n` +
-                        `🍴 */liste* : Bugünün yemek menüsünü gösterir.\n` +
-                        `🍱 */siparisim* : Bugün verdiğiniz siparişleri listeler.\n` +
+                    const helpText = `*YEMEK BOTU KOMUTLARI*\n\n` +
+                        `🍱*/liste* : Bugünün yemek menüsünü gösterir.\n` +
+                        `🍽️*/siparisim* : Bugün verdiğiniz siparişleri listeler.\n` +
                         `❌ */iptal [İsim]* : Belirttiğiniz isme ait siparişi siler.\n` +
-                        `🤖 */oneri [İsim]* : Geçmişe göre otomatik sipariş verir. Örn: /oneri Yiğit\n` +
-                        `❓ */siparis* : Nasıl sipariş verilir? (Rehber)\n`
+                        `🪄 */siparis [İsim]* : Geçmişinize göre size uygun otomatik sipariş verir. Örn: /oneri Yiğit\n` +
+                        `❓ */rehber* : Nasıl sipariş verilir?\n`
                         ;
                     await sock.sendMessage(sender, { text: helpText }, { quoted: msg });
                     return;
@@ -517,23 +517,23 @@ async function connectToWhatsApp() {
                     if (todayMenu.soup?.length) menuText += `🥣 *Çorbalar:*\n- ${todayMenu.soup.map(f => f.name).join("\n- ")}\n\n`;
                     if (todayMenu.mainCourse?.length) menuText += `🍛 *Ana Yemekler:*\n- ${todayMenu.mainCourse.map(f => f.name).join("\n- ")}\n\n`;
                     if (todayMenu.side?.length) menuText += `🍚 *Yardımcı Yemekler:*\n- ${todayMenu.side.map(f => f.name).join("\n- ")}\n\n`;
-                    if (todayMenu.cold?.length) menuText += `🥗 *Soğuklar / Salata:*\n- ${todayMenu.cold.map(f => f.name).join("\n- ")}\n\n`;
+                    if (todayMenu.cold?.length) menuText += `🥗 *Soğuklar:*\n- ${todayMenu.cold.map(f => f.name).join("\n- ")}\n\n`;
                     if (todayMenu.dessert?.length) menuText += `🍮 *Tatlılar:*\n- ${todayMenu.dessert.map(f => f.name).join("\n- ")}\n\n`;
                     menuText += `_Afiyet olsun!_ ❤️`;
                     await sock.sendMessage(sender, { text: menuText }, { quoted: msg });
                     return;
                 }
 
-                if (command === "/siparisim" || command === "/order") {
+                if (command === "/siparisim" || command === "/myorder") {
                     const myRecords = await Record.find({ date: today, senderJid: sender }).populate("user items.food");
                     if (myRecords.length === 0) {
                         await sock.sendMessage(sender, { text: "🔍 Bugün için henüz bir siparişiniz bulunmuyor." }, { quoted: msg });
                         return;
                     }
-                    let statusText = `🍱 *BUGÜNKÜ SİPARİŞLERİNİZ* 🍱\n\n`;
+                    let statusText = `🍽️ *BUGÜNKÜ SİPARİŞLERİNİZ* \n\n`;
                     myRecords.forEach((rec, index) => {
                         const name = rec.isGuest
-                            ? `👤 ${rec.guestName} (Misafir)`
+                            ? `👤 ${rec.guestName}`
                             : `👤 ${rec.user?.firstName} ${rec.user?.lastName || ""}`.trim();
 
                         statusText += `${index + 1}. ${name}:\n`;
@@ -597,24 +597,23 @@ async function connectToWhatsApp() {
                     return;
                 }
 
-                if (command === "/siparis") {
+                if (command === "/rehber") {
                     const guideText = `❓ *NASIL SİPARİŞ VERİLİR?* ❓\n\n` +
-                        `Botu kullanmak çok kolay! Grupta normal bir şekilde yazmanız yeterli:\n\n` +
                         `✅ *Kendi siparişiniz için:* "İsminiz ve menüden seçeceğiniz yemek adı"\n` +
-                        `👥 *Başkası/Misafir için:* "İsim ve menüden seçeceğiniz yemek adı"\n` +
+                        `👥 *Başkası için:* "İsim ve menüden seçeceğiniz yemek adı"\n` +
                         `🔢 *Porsiyon belirtmek için:* Yemeğin yanına detay belirtebilirsiniz.Örn:"Az kuru" veya "1.5 iskender"\n\n` +
                         `⚠️ Siparişinizde menü dışı bir yemek varsa bot sizi sarı ünlem (⚠️) ile uyarır.`;
                     await sock.sendMessage(sender, { text: guideText }, { quoted: msg });
                     return;
                 }
 
-                if (command === "/oneri" || command === "/recommend") {
-                    // 1. Komuttan isim al: "/oneri Yiğit" → "yiğit"
+                if (command === "/siparis" || command === "/order" || command === "/sipariş") {
+                    // 1. Komuttan isim al: "/siparis Yiğit" → "yiğit"
                     const nameArg = text.split(" ").slice(1).join(" ").trim().toLowerCase();
 
                     if (!nameArg) {
                         await sock.sendMessage(sender, {
-                            text: "ℹKullanım: */oneri [İsim]*\n*"
+                            text: "ℹKullanım: */siparis [İsim]*\n*"
                         }, { quoted: msg });
                         return;
                     }
@@ -640,7 +639,7 @@ async function connectToWhatsApp() {
                         const existingPopulated = await Record.findOne({ date: today, user: matchedUser._id }).populate("items.food");
                         const itemList = existingPopulated.items.map(i => `- ${i.food?.name}`).join("\n");
                         await sock.sendMessage(sender, {
-                            text: `ℹ️ Bugün zaten bir siparişin var:\n${itemList}\n\nDeğiştirmek istersen */iptal hepsi* yaz, ardından */onerim* tekrar dene.`
+                            text: `ℹ️ Bugün zaten bir siparişin var:\n${itemList}\n\nDeğiştirmek istersen */iptal* yaz, ardından */siparis* tekrar dene.`
                         }, { quoted: msg });
                         return;
                     }
@@ -755,10 +754,10 @@ Görev:
 - Sadece saf JSON döndür, başka bir şey yazma:
 {"items": [{"id": "...", "portion": 1}, ...]}`;
 
-                    console.log(" [/oneri] Gemini öneri hesaplıyor...");
+                    console.log(" [/siparis] Gemini öneri hesaplıyor...");
                     const recResult = await geminiModel.generateContent(recommendPrompt);
                     const recText = recResult.response.text().trim();
-                    console.log(" [/oneri] Gemini Cevabı:", recText);
+                    console.log(" [/siparis] Gemini Cevabı:", recText);
 
                     let recommendedItems;
                     try {
@@ -766,8 +765,8 @@ Görev:
                         recommendedItems = JSON.parse(cleanJson).items;
                         if (!Array.isArray(recommendedItems) || recommendedItems.length === 0) throw new Error("Boş liste");
                     } catch (e) {
-                        console.error("[/oneri] JSON parse hatası:", e.message);
-                        await sock.sendMessage(sender, { text: "⚠️ Öneri oluşturulamadı, lütfen tekrar dene." }, { quoted: msg });
+                        console.error("[/siparis] JSON parse hatası:", e.message);
+                        await sock.sendMessage(sender, { text: "⚠️ Sipariş oluşturulamadı, lütfen tekrar dene." }, { quoted: msg });
                         return;
                     }
 
@@ -784,7 +783,7 @@ Görev:
                     }
 
                     if (orderItems.length === 0) {
-                        await sock.sendMessage(sender, { text: "⚠️ Öneri için uygun yemek bulunamadı." }, { quoted: msg });
+                        await sock.sendMessage(sender, { text: "⚠️ Sipariş için uygun yemek bulunamadı." }, { quoted: msg });
                         return;
                     }
 
@@ -799,17 +798,14 @@ Görev:
 
                     await sock.sendMessage(sender, { react: { text: "✅", key: msg.key } });
                     await sock.sendMessage(sender, {
-                        text: `*${matchedUser.firstName} için otomatik sipariş verildi!*\n\n${foodNames.join("\n")}`
+                        text: `${matchedUser.firstName}\n${foodNames.map(name => `•  ${name.trim()}`).join("\n")}`
                     }, { quoted: msg });
                     return;
                 }
 
-                // Eğer komut bulunamadıysa (yanlış yazıldıysa) yine de dur, Gemini'ye gönderme
                 return;
             }
 
-            // --- ALINTILANMIŞ MESAJ: EKSİK ÜRÜN BİLDİRİMİ ---
-            // Kullanıcı kendi mesajını alıntılayıp "kola gelmedi" gibi bir şey yazdıysa
             const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
             const quotedText = contextInfo?.quotedMessage?.conversation
                 || contextInfo?.quotedMessage?.extendedTextMessage?.text;
@@ -817,7 +813,6 @@ Görev:
             const realSenderJid = msg.key.participant || sender;
 
             if (quotedText && quotedSender && quotedSender.split(":")[0] === realSenderJid.split(":")[0]) {
-                // Alıntılanan mesaj kendi mesajıysa, Gemini'ye eksiklik bildirimi mi diye sor
                 const missingPrompt = `Aşağıda bir WhatsApp grubundaki iki mesaj var.
 
 ALINTILAMIŞ MESAJ (Kullanıcının kendi sipariş mesajı):
@@ -826,15 +821,15 @@ ALINTILAMIŞ MESAJ (Kullanıcının kendi sipariş mesajı):
 YENİ MESAJ:
 "${text}"
 
-Soru: Yeni mesaj, alıntılanan siparişteki bir veya birden fazla ürünün eksik geldiğini bildiriyor mu?
+Soru: Yeni mesaj, alıntılanan siparişteki bir veya birden fazla ürünün EKSİK geldiğini mi bildiriyor (örn: "kola gelmedi"), yoksa daha önce eksik olan bir ürünün şimdi GELDİĞİNİ/ULAŞTIĞINI mı (örn: "kola şimdi geldi", "geldi")?
 
-Eğer evet:
-- "personName": Alıntılanan mesajdaki kişi ismi (örn: "Ali"). Eğer isim yoksa null yaz.
-- "items": Gelmediği belirtilen ürünlerin listesi (alıntılanan mesajdaki yazıma yakın isimlerle)
+Eğer EKSİK bildirimi ise:
+{"type": "MISSING_ITEM", "personName": "Ali", "items": ["Kola"]}
 
-{"type": "MISSING_ITEM", "personName": "Ali", "items": ["Kola", "Pilav"]}
+Eğer ürün GELDİ/TAMAMLANDI bildirimi ise:
+{"type": "ITEM_ARRIVED", "personName": "Ali", "items": ["Kola"]}
 
-Eğer hayır:
+Eğer hayırsa:
 {"type": "IGNORE"}
 
 Sadece JSON döndür.`;
@@ -848,68 +843,79 @@ Sadece JSON döndür.`;
                     parsed = JSON.parse(missingText.replace(/```json|```/g, "").trim());
                 } catch { parsed = { type: "IGNORE" }; }
 
-                if (parsed.type === "MISSING_ITEM" && Array.isArray(parsed.items) && parsed.items.length > 0) {
-                    // Bugün bu numaradan verilen tüm siparişleri bul
+                if ((parsed.type === "MISSING_ITEM" || parsed.type === "ITEM_ARRIVED") && Array.isArray(parsed.items) && parsed.items.length > 0) {
                     const todayRecords = await Record.find({ date: today, senderJid: sender }).populate("items.food");
-
-                    const removedItems = [];
+                    const processedItems = [];
                     const notFoundItems = [];
 
                     for (const itemName of parsed.items) {
                         const nameLower = itemName.toLowerCase().trim();
-                        let removed = false;
+                        let found = false;
 
                         for (const record of todayRecords) {
-                            // personName varsa o isimle eşleş, yoksa tüm kayıtlara bak
                             if (parsed.personName) {
-                                const recName = (record.isGuest
-                                    ? record.guestName
-                                    : `${record.user?.firstName || ""}`).toLowerCase();
+                                const recName = (record.isGuest ? record.guestName : record.user?.firstName || "").toLowerCase();
                                 if (!recName.includes(parsed.personName.toLowerCase())) continue;
                             }
 
-                            const matchIdx = record.items.findIndex(i =>
-                                i.food?.name?.toLowerCase().includes(nameLower) ||
-                                nameLower.includes(i.food?.name?.toLowerCase())
-                            );
+                            if (parsed.type === "MISSING_ITEM") {
+                                const matchIdx = record.items.findIndex(i =>
+                                    i.food?.name?.toLowerCase().includes(nameLower) ||
+                                    nameLower.includes(i.food?.name?.toLowerCase())
+                                );
+                                if (matchIdx !== -1) {
+                                    processedItems.push(record.items[matchIdx].food?.name);
+                                    record.items.splice(matchIdx, 1);
+                                    await record.save();
+                                    found = true;
+                                    break;
+                                }
+                            } else if (parsed.type === "ITEM_ARRIVED") {
+                                // Geri ekleme doğrulaması: Orijinal mesajda bu ürün geçiyor mu?
+                                const nameLower = itemName.toLowerCase().trim();
+                                const isOriginal = quotedText.toLowerCase().includes(nameLower);
 
-                            if (matchIdx !== -1) {
-                                const foodName = record.items[matchIdx].food?.name;
-                                record.items.splice(matchIdx, 1);
-                                await record.save();
-                                removedItems.push(foodName);
-                                removed = true;
-                                break;
+                                // Eğer tam isim geçmiyorsa bile veritabanındaki adıyla bir kez daha kontrol et
+                                const foodDoc = await Food.findOne({ name: { $regex: new RegExp(nameLower, "i") } });
+                                const isFoodNameOriginal = foodDoc && quotedText.toLowerCase().includes(foodDoc.name.toLowerCase());
+
+                                if (foodDoc && (isOriginal || isFoodNameOriginal)) {
+                                    const exists = record.items.some(i => i.food?._id.toString() === foodDoc._id.toString());
+                                    if (!exists) {
+                                        record.items.push({ food: foodDoc._id, portion: 1, price: foodDoc.price });
+                                        await record.save();
+                                        processedItems.push(foodDoc.name);
+                                        found = true;
+                                        break;
+                                    } else {
+                                        found = true;
+                                    }
+                                }
                             }
                         }
-
-                        if (!removed) notFoundItems.push(itemName);
+                        if (!found) notFoundItems.push(itemName);
                     }
 
                     let replyText = "";
-                    if (removedItems.length > 0) {
-                        replyText += `Siparişten kaldırıldı: ${removedItems.join(", ")}`;
-                    }
-                    if (notFoundItems.length > 0) {
-                        replyText += `\nSiparişte bulunamadı: ${notFoundItems.join(", ")}`;
+                    if (parsed.type === "MISSING_ITEM") {
+                        if (processedItems.length > 0) replyText += `Siparişten kaldırıldı: ${processedItems.join(", ")}`;
+                        if (notFoundItems.length > 0) replyText += `\nSiparişte bulunamadı: ${notFoundItems.join(", ")}`;
+                    } else {
+                        if (processedItems.length > 0) replyText += `Siparişe geri eklendi: ${processedItems.join(", ")}`;
+                        if (notFoundItems.length > 0) replyText += `\nSiparişte/Menüde bulunamadı: ${notFoundItems.join(", ")}`;
                     }
 
-                    if (replyText) {
-                        await sock.sendMessage(sender, { text: replyText.trim() }, { quoted: msg });
-                    }
+                    if (replyText) await sock.sendMessage(sender, { text: replyText.trim() }, { quoted: msg });
                     return;
                 }
-                // IGNORE ise normal akışa devam et (fall-through)
             }
 
             try {
                 console.log("🤖 Gemini mesajı analiz ediyor (Menü veya Sipariş?)...");
 
-                // Veritabanındaki mevcut yemek ve kullanıcı listelerini çekelim
                 const existingFoods = await Food.find({}, "_id name category");
                 const existingFoodNames = existingFoods.map(f => `{"id": "${f._id}", "name": "${f.name}"}`).join(", ");
 
-                // Baş harfleri büyük yapan yardımcı fonksiyon
                 const existingUsers = await User.find({});
                 const existingUserNames = existingUsers.map(u => u.lastName ? `${u.firstName} ${u.lastName}` : u.firstName).join(", ");
 
@@ -991,14 +997,19 @@ Sadece JSON döndür.`;
                   ]
                 }
 
-                3. EĞER mesaj, daha önce verilmiş bir siparişten bir veya birden fazla ürünün GELMEDIĞINI bildiriyorsa (örn: "gazoz gelmedi", "pilav eksikti", "kolayı kaldır", "X'in çorbası gelmemiş"), type: "MISSING_ITEM" döndür.
+                3. EĞER mesaj, daha önce eksik olan bir ürünün şimdi GELDİĞİNİ/ULAŞTIĞINI bildiriyorsa (örn: "kola geldi", "Yiğit'in yemeği tamam"), type: "ITEM_ARRIVED" döndür.
+                   - "personName": Mesajda geçen kişi adı (örn: "Ali"). Mesaj kişi adı içermiyorsa null yaz.
+                   - "items": Gelen ürünlerin listesi.
+                   Format: {"type": "ITEM_ARRIVED", "personName": "Ali", "items": ["Kola"]}
+
+                4. EĞER mesaj, daha önce verilmiş bir siparişten bir veya birden fazla ürünün GELMEDIĞINI bildiriyorsa (örn: "gazoz gelmedi", "pilav eksikti", "kolayı kaldır", "X'in çorbası gelmemiş"), type: "MISSING_ITEM" döndür.
                    - "personName": Mesajda geçen kişi adı (örn: "Ali"). Mesaj kişi adı içermiyorsa null yaz.
                    - "items": Gelmediği belirtilen ürünlerin listesi.
                    Format: {"type": "MISSING_ITEM", "personName": "Ali", "items": ["Gazoz", "Pilav"]}
 
-                4. ÖNEMLİ: Eğer mesaj bir botun onay mesajı ise (örn: "Siparişten kaldırıldı:", "Siparişte bulunamadı:", "sipariş verildi") veya bu tür sistem mesajlarını içeriyorsa, type: "IGNORE" döndür.
+                5. ÖNEMLİ: Eğer mesaj bir botun onay mesajı ise (örn: "Siparişten kaldırıldı:", "Siparişte bulunamadı:", "sipariş verildi") veya bu tür sistem mesajlarını içeriyorsa, type: "IGNORE" döndür.
 
-                5. EĞER metin bir sipariş veya menü değilse (sohbet, teşekkür, geribildirim, selamlaşma veya alakasız bir mesajsa), type: "IGNORE" döndür.
+                6. EĞER metin bir sipariş veya menü değilse (sohbet, teşekkür, geribildirim, selamlaşma veya alakasız bir mesajsa), type: "IGNORE" döndür.
 
                 Sadece saf JSON döndür, kod blokları ( \`\`\` ) kullanma.
 
@@ -1012,38 +1023,76 @@ Sadece JSON döndür.`;
                     const cleanJson = responseText.replace(/```json|```/g, "").trim();
                     const parsedData = JSON.parse(cleanJson);
 
-                    if (parsedData.type === "MISSING_ITEM" && Array.isArray(parsedData.items) && parsedData.items.length > 0) {
+                    if ((parsedData.type === "MISSING_ITEM" || parsedData.type === "ITEM_ARRIVED") && Array.isArray(parsedData.items) && parsedData.items.length > 0) {
                         const todayRecords = await Record.find({ date: today, senderJid: sender }).populate("items.food");
-                        const removedItems = [];
+                        const processedItems = [];
                         const notFoundItems = [];
 
                         for (const itemName of parsedData.items) {
                             const nameLower = itemName.toLowerCase().trim();
-                            let removed = false;
+                            let found = false;
 
                             for (const record of todayRecords) {
                                 if (parsedData.personName) {
                                     const recName = (record.isGuest ? record.guestName : record.user?.firstName || "").toLowerCase();
                                     if (!recName.includes(parsedData.personName.toLowerCase())) continue;
                                 }
-                                const matchIdx = record.items.findIndex(i =>
-                                    i.food?.name?.toLowerCase().includes(nameLower) ||
-                                    nameLower.includes(i.food?.name?.toLowerCase())
-                                );
-                                if (matchIdx !== -1) {
-                                    removedItems.push(record.items[matchIdx].food?.name);
-                                    record.items.splice(matchIdx, 1);
-                                    await record.save();
-                                    removed = true;
-                                    break;
+
+                                if (parsedData.type === "MISSING_ITEM") {
+                                    const matchIdx = record.items.findIndex(i =>
+                                        i.food?.name?.toLowerCase().includes(nameLower) ||
+                                        nameLower.includes(i.food?.name?.toLowerCase())
+                                    );
+                                    if (matchIdx !== -1) {
+                                        processedItems.push(record.items[matchIdx].food?.name);
+                                        record.items.splice(matchIdx, 1);
+                                        await record.save();
+                                        found = true;
+                                        break;
+                                    }
+                                } else if (parsedData.type === "ITEM_ARRIVED") {
+                                    // Ana akışta da alıntı kontrolü yapalım
+                                    if (!quotedText) {
+                                        // Alıntı yoksa hiç ekleme yapma, uyarı verilecek
+                                        continue;
+                                    }
+
+                                    const isOriginal = quotedText.toLowerCase().includes(nameLower);
+                                    const foodDoc = await Food.findOne({ name: { $regex: new RegExp(nameLower, "i") } });
+                                    const isFoodNameOriginal = foodDoc && quotedText.toLowerCase().includes(foodDoc.name.toLowerCase());
+
+                                    if (foodDoc && (isOriginal || isFoodNameOriginal)) {
+                                        const exists = record.items.some(i => i.food?._id.toString() === foodDoc._id.toString());
+                                        if (!exists) {
+                                            record.items.push({ food: foodDoc._id, portion: 1, price: foodDoc.price });
+                                            await record.save();
+                                            processedItems.push(foodDoc.name);
+                                            found = true;
+                                            break;
+                                        } else {
+                                            found = true;
+                                        }
+                                    }
                                 }
                             }
-                            if (!removed) notFoundItems.push(itemName);
+                            if (!found) notFoundItems.push(itemName);
                         }
 
                         let replyText = "";
-                        if (removedItems.length > 0) replyText += `Siparişten kaldırıldı: ${removedItems.join(", ")}`;
-                        if (notFoundItems.length > 0) replyText += `\nSiparişte bulunamadı: ${notFoundItems.join(", ")}`;
+                        if (parsedData.type === "MISSING_ITEM") {
+                            if (processedItems.length > 0) replyText += `Siparişten kaldırıldı: ${processedItems.join(", ")}`;
+                            if (notFoundItems.length > 0) replyText += `\nSiparişte bulunamadı: ${notFoundItems.join(", ")}`;
+                        } else {
+                            if (processedItems.length > 0) {
+                                replyText += `Siparişe geri eklendi: ${processedItems.join(", ")}`;
+                            } else if (notFoundItems.length > 0) {
+                                if (!quotedText) {
+                                    replyText += `Geri ekleme için lütfen orijinal sipariş mesajınızı alıntılayın.`;
+                                } else {
+                                    replyText += `"${notFoundItems.join(", ")}" orijinal siparişinizde bulunamadı.`;
+                                }
+                            }
+                        }
                         if (replyText) await sock.sendMessage(sender, { text: replyText.trim() }, { quoted: msg });
                         return;
                     }
