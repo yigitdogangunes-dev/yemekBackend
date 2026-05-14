@@ -501,7 +501,7 @@ async function connectToWhatsApp() {
                         `🍱*/liste* : Bugünün yemek menüsünü gösterir.\n` +
                         `🍽️*/siparisim* : Bugün verdiğiniz siparişleri listeler.\n` +
                         `❌ */iptal [İsim]* : Belirttiğiniz isme ait siparişi siler.\n` +
-                        `🪄 */siparis [İsim]* : Geçmişinize göre size uygun otomatik sipariş verir. Örn: /oneri Yiğit\n` +
+                        `🪄 */[İsim]* : Geçmişinize göre size uygun otomatik sipariş verir. Örn: /Yiğit\n` +
                         `❓ */rehber* : Nasıl sipariş verilir?\n`
                         ;
                     await sock.sendMessage(sender, { text: helpText }, { quoted: msg });
@@ -607,14 +607,24 @@ async function connectToWhatsApp() {
                     return;
                 }
 
-                if (command === "/siparis" || command === "/order" || command === "/sipariş") {
-                    // 1. Komuttan isim al: "/siparis Yiğit" → "yiğit"
-                    const nameArg = text.split(" ").slice(1).join(" ").trim().toLowerCase();
+                const systemCommands = ["/komutlar", "/commands", "/help", "/liste", "/siparisim", "/myorder", "/iptal", "/rehber"];
+                const isSystemCommand = systemCommands.includes(command);
+
+                if (command === "/siparis" || command === "/order" || command === "/sipariş" || !isSystemCommand) {
+                    // 1. Komuttan isim al
+                    let nameArg = "";
+                    if (command === "/siparis" || command === "/order" || command === "/sipariş") {
+                        nameArg = text.split(" ").slice(1).join(" ").trim().toLowerCase();
+                    } else {
+                        nameArg = command.slice(1).trim().toLowerCase();
+                    }
 
                     if (!nameArg) {
-                        await sock.sendMessage(sender, {
-                            text: "ℹKullanım: */siparis [İsim]*\n*"
-                        }, { quoted: msg });
+                        if (command === "/siparis" || command === "/order" || command === "/sipariş") {
+                            await sock.sendMessage(sender, {
+                                text: "ℹ️ Kullanım: */siparis [İsim]* veya direkt */[İsim]*"
+                            }, { quoted: msg });
+                        }
                         return;
                     }
 
@@ -626,9 +636,12 @@ async function connectToWhatsApp() {
                     });
 
                     if (!matchedUser) {
-                        await sock.sendMessage(sender, {
-                            text: `❌ "${toTitleCase(nameArg)}" adında kayıtlı bir kullanıcı bulunamadı.`
-                        }, { quoted: msg });
+                        // Eğer özel bir komut (/siparis) ise hata ver, ama direkt /[isim] ise ve isim yoksa sessizce geç
+                        if (command === "/siparis" || command === "/order" || command === "/sipariş") {
+                            await sock.sendMessage(sender, {
+                                text: `❌ "${toTitleCase(nameArg)}" adında kayıtlı bir kullanıcı bulunamadı.`
+                            }, { quoted: msg });
+                        }
                         return;
                     }
 
