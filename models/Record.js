@@ -43,7 +43,8 @@ const recordSchema = new mongoose.Schema({
   },
   senderJid: {
     type: String // Siparişi veren kişinin WhatsApp ID'sini tutmak için
-  }
+  },
+  botMessageIds: [String] // Botun bu sipariş için gönderdiği özet mesajlarının ID listesi
 }, { timestamps: true }); // Automatically records createdAt and updatedAt
 
 // Sık kullanılan sorgular için indeksler
@@ -52,5 +53,6 @@ recordSchema.index({ date: 1 });                    // admin: tüm gün sipariş
 recordSchema.index({ isGuest: 1, guestName: 1, date: 1 }); // misafir sipariş upsert
 recordSchema.index({ messageId: 1 }, { sparse: true });    // edit -> deleteMany({messageId})
 recordSchema.index({ senderJid: 1 }, { sparse: true });    // /siparisim lookup
+recordSchema.index({ botMessageIds: 1 }, { sparse: true });// /+yemek /-yemek edit lookup
 
 module.exports = mongoose.model("Record", recordSchema);

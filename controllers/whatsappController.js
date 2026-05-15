@@ -17,6 +17,17 @@ const { createTtlCache } = require("../utils/cache");
 const getFoodsCached = createTtlCache(60_000);
 const getUsersCached = createTtlCache(60_000);
 
+// Türkçe karakterleri normalize eder + lowercase + trim.
+// "Fırın Kanat" ve "firin kanat" eşleşir.
+function normalizeTr(s) {
+    if (!s) return "";
+    return s.toLowerCase()
+        .replace(/ğ/g, "g").replace(/ş/g, "s").replace(/ı/g, "i")
+        .replace(/ç/g, "c").replace(/ö/g, "o").replace(/ü/g, "u")
+        .replace(/İ/gi, "i").replace(/Ğ/gi, "g").replace(/Ş/gi, "s")
+        .trim();
+}
+
 // Rate-limit: göndericinin saniyede en fazla 1 mesajı işlenir.
 // Spam DoS koruması — Gemini quota + DB yükünü sınırlar.
 const RATE_LIMIT_WINDOW_MS = 1000;
@@ -529,6 +540,8 @@ async function connectToWhatsApp() {
                         `🍽️*/siparisim* : Bugün verdiğiniz siparişleri listeler.\n` +
                         `❌ */iptal [İsim]* : Belirttiğiniz isme ait siparişi siler.\n` +
                         `🪄 */[İsim]* : Geçmişinize göre size uygun otomatik sipariş verir. Örn: /Yiğit\n` +
+                        `➕ */+yemek* : Sipariş özetini alıntılayarak yemek ekler. Örn: /+Fırın Kanat\n` +
+                        `➖ */-yemek* : Sipariş özetini alıntılayarak yemek çıkarır. Örn: /-Fırın Kanat\n` +
                         `❓ */rehber* : Nasıl sipariş verilir?\n`
                         ;
                     await sock.sendMessage(sender, { text: helpText }, { quoted: msg });
@@ -631,6 +644,163 @@ async function connectToWhatsApp() {
                         `🔢 *Porsiyon belirtmek için:* Yemeğin yanına detay belirtebilirsiniz.Örn:"Az kuru" veya "1.5 iskender"\n\n` +
                         `⚠️ Siparişinizde menü dışı bir yemek varsa bot sizi sarı ünlem (⚠️) ile uyarır.`;
                     await sock.sendMessage(sender, { text: guideText }, { quoted: msg });
+                    return;
+                }
+
+                // ---- /+yemek (ekle)  /-yemek (çıkar) ----
+                // Kullanım: Botun sipariş özetini ALINTILAYIP gönder.
+                if (text.startsWith("/+") || text.startsWith("/-")) {
+                    const action = text.startsWith("/+") ? "add" : "remove";
+                    const foodNameRaw = text.slice(2).trim();
+
+                    if (!foodNameRaw) {
+                        await sock.sendMessage(sender, {
+                            text: `ℹ️ Kullanım:\n*/+yemek_adı* (eklemek için)\n*/-yemek_adı* (çıkarmak için)\n\nBotun sipariş özet mesajını alıntılayarak gönderin.`
+                        }, { quoted: msg });
+                        return;
+                    }
+
+                    // Alıntı (quote) zorunlu — hangi siparişe bağlı olduğunu bilmek için
+                    const ctxInfo = msg.message?.extendedTextMessage?.contextInfo;
+                    const quotedStanzaId = ctxInfo?.stanzaId;
+
+                    console.log(`🔎 [/${action === "add" ? "+" : "-"}${foodNameRaw}] quotedStanzaId=${quotedStanzaId} | sender=${sender}`);
+
+                    if (!quotedStanzaId) {
+                        await sock.sendMessage(sender, {
+                            text: `ℹ️ Lütfen düzenlemek istediğiniz siparişin bot özet mesajını alıntılayarak (yanıtlayarak) bu komutu gönderin.`
+                        }, { quoted: msg });
+                        return;
+                    }
+
+                    const targetRecord = await Record.findOne({ botMessageIds: quotedStanzaId }).populate("items.food");
+
+                    if (!targetRecord) {
+                        // Diagnostik: bugünün kayıtlarındaki botMessageIds'leri logla
+                        const todaysRecords = await Record.find({ date: today }).select("_id user guestName isGuest botMessageIds").lean();
+                        console.log(`   ⚠️ Record bulunamadı. Bugünün kayıtları:`, JSON.stringify(todaysRecords, null, 2));
+
+                        await sock.sendMessage(sender, {
+                            text: `❌ Bu mesaja bağlı bir sipariş bulamadım. Lütfen son sipariş özetini alıntılayın.`
+                        }, { quoted: msg });
+                        return;
+                    }
+
+                    // İzin: yalnızca siparişi oluşturan kişi düzenleyebilir
+                    if (targetRecord.senderJid && targetRecord.senderJid !== sender) {
+                        await sock.sendMessage(sender, {
+                            text: `🚫 Bu siparişi yalnızca onu oluşturan kişi düzenleyebilir.`
+                        }, { quoted: msg });
+                        return;
+                    }
+
+                    if (action === "add") {
+                        // Aday yemek havuzu: bugünün menüsü + tüm aktif içecekler
+                        const menuFoods = todayMenu ? [
+                            ...(todayMenu.soup || []),
+                            ...(todayMenu.mainCourse || []),
+                            ...(todayMenu.side || []),
+                            ...(todayMenu.cold || []),
+                            ...(todayMenu.dessert || []),
+                        ] : [];
+                        const drinks = await Food.find({ category: "drink", status: "active" });
+                        const candidates = [...menuFoods, ...drinks];
+
+                        const targetNorm = normalizeTr(foodNameRaw);
+                        // Önce tam eşleşme, sonra includes (fuzzy)
+                        let matchedFood = candidates.find(f => normalizeTr(f.name) === targetNorm);
+                        if (!matchedFood) {
+                            matchedFood = candidates.find(f => {
+                                const n = normalizeTr(f.name);
+                                return n.includes(targetNorm) || targetNorm.includes(n);
+                            });
+                        }
+
+                        if (!matchedFood) {
+                            await sock.sendMessage(sender, {
+                                text: `❌ "${foodNameRaw}" bugünün menüsünde veya içeceklerde bulunamadı.`
+                            }, { quoted: msg });
+                            return;
+                        }
+
+                        if (matchedFood.status === "passive") {
+                            await sock.sendMessage(sender, {
+                                text: `⚠️ ${matchedFood.name} bugün tükenmiş, eklenemiyor.`
+                            }, { quoted: msg });
+                            return;
+                        }
+
+                        const alreadyIn = targetRecord.items.some(i => i.food?._id?.toString() === matchedFood._id.toString());
+                        if (alreadyIn) {
+                            await sock.sendMessage(sender, {
+                                text: `ℹ️ ${matchedFood.name} zaten bu siparişte var.`
+                            }, { quoted: msg });
+                            return;
+                        }
+
+                        const unitPrice = Number.isFinite(matchedFood.price) ? matchedFood.price : 0;
+                        targetRecord.items.push({
+                            food: matchedFood._id,
+                            portion: 1,
+                            price: unitPrice
+                        });
+                        targetRecord.markModified("items");
+                        await targetRecord.save();
+                    } else {
+                        // remove
+                        const targetNorm = normalizeTr(foodNameRaw);
+                        let idx = targetRecord.items.findIndex(i => i.food && normalizeTr(i.food.name) === targetNorm);
+                        if (idx === -1) {
+                            idx = targetRecord.items.findIndex(i => {
+                                if (!i.food) return false;
+                                const n = normalizeTr(i.food.name);
+                                return n.includes(targetNorm) || targetNorm.includes(n);
+                            });
+                        }
+
+                        if (idx === -1) {
+                            const currentList = targetRecord.items.filter(i => i.food).map(i => i.food.name).join(", ") || "(boş)";
+                            await sock.sendMessage(sender, {
+                                text: `❌ "${foodNameRaw}" bu siparişte bulunamadı.\nMevcut yemekler: ${currentList}`
+                            }, { quoted: msg });
+                            return;
+                        }
+
+                        targetRecord.items.splice(idx, 1);
+                        targetRecord.markModified("items");
+
+                        if (targetRecord.items.length === 0) {
+                            await Record.findByIdAndDelete(targetRecord._id);
+                            await sock.sendMessage(sender, { react: { text: "🗑️", key: msg.key } });
+                            await sock.sendMessage(sender, {
+                                text: `🗑️ Tüm yemekler çıkarıldı, sipariş silindi.`
+                            }, { quoted: msg });
+                            return;
+                        }
+
+                        await targetRecord.save();
+                    }
+
+                    // Güncellenmiş özeti gönder ve yeni botMessageId'yi kaydet
+                    const refreshed = await Record.findById(targetRecord._id).populate("items.food").populate("user");
+                    const displayName = refreshed.isGuest
+                        ? `${refreshed.guestName || "Misafir"} (Misafir)`
+                        : (refreshed.user?.firstName || "Bilinmeyen");
+                    const foodList = refreshed.items
+                        .filter(i => i.food)
+                        .map(i => `•  ${i.food.name}`)
+                        .join("\n");
+
+                    await sock.sendMessage(sender, { react: { text: "✅", key: msg.key } });
+                    const sentSummary = await sock.sendMessage(sender, {
+                        text: `${displayName}\n${foodList}`
+                    }, { quoted: msg });
+
+                    if (sentSummary?.key?.id) {
+                        await Record.findByIdAndUpdate(refreshed._id, {
+                            $push: { botMessageIds: sentSummary.key.id }
+                        });
+                    }
                     return;
                 }
 
@@ -825,19 +995,31 @@ Görev:
                         return;
                     }
 
-                    await Record.create({
+                    const newRecord = await Record.create({
                         date: today,
                         user: matchedUser._id,
                         isGuest: false,
                         guestName: "",
                         items: orderItems,
-                        senderJid: sender
+                        senderJid: sender,
+                        botMessageIds: []
                     });
 
                     await sock.sendMessage(sender, { react: { text: "✅", key: msg.key } });
-                    await sock.sendMessage(sender, {
+                    const sentSummary = await sock.sendMessage(sender, {
                         text: `${matchedUser.firstName}\n${foodNames.map(name => `•  ${name.trim()}`).join("\n")}`
                     }, { quoted: msg });
+
+                    // /+yemek /-yemek ile bu özeti alıntılayıp düzenleyebilmek için ID'yi kaydet
+                    console.log(`📤 [/siparis] sentSummary keys:`, sentSummary ? Object.keys(sentSummary) : "null", "| key.id =", sentSummary?.key?.id);
+                    if (sentSummary?.key?.id) {
+                        await Record.findByIdAndUpdate(newRecord._id, {
+                            $push: { botMessageIds: sentSummary.key.id }
+                        });
+                        console.log(`   ✅ botMessageId "${sentSummary.key.id}" Record ${newRecord._id} üzerine eklendi.`);
+                    } else {
+                        console.warn(`   ⚠️ sentSummary.key.id alınamadı — /+yemek /-yemek bu sipariş için çalışmayacak!`);
+                    }
                     return;
                 }
 
