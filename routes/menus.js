@@ -11,7 +11,7 @@ router.use(authMiddleware);
 // GET: Herkes günlük menüyü görebilir
 router.get("/", getMenus);
 
-// POST: Herkes menü oluşturabilir (otomatik oluşturma için açık bırakıyoruz)
-router.post("/", createMenu);
+// POST: Sadece admin menü oluşturabilir / güncelleyebilir
+router.post("/", adminMiddleware, createMenu);
 
 module.exports = router;

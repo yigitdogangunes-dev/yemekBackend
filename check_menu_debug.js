@@ -2,12 +2,13 @@
 const mongoose = require('mongoose');
 const Menu = require('./models/Menu');
 const Food = require('./models/Food');
+const { getTodayTRT } = require('./utils/date');
 require('dotenv').config();
 
 async function checkMenu() {
     try {
         await mongoose.connect(process.env.MONGO_URI);
-        const todayStr = new Date().toISOString().split("T")[0];
+        const todayStr = getTodayTRT();
         console.log("Checking menu for date:", todayStr);
         
         const todayMenu = await Menu.findOne({ date: todayStr }).populate("soup mainCourse side cold dessert");

@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const menuSchema = new mongoose.Schema({
   date: {
-    type: String,
+    type: Date,
     required: true
   },
   soup: [{
@@ -31,5 +31,8 @@ const menuSchema = new mongoose.Schema({
     default: "active"
   }
 }, { timestamps: true });
+
+// Günlük menü sorguları — findOne({date}) ve findOneAndUpdate({date}) için
+menuSchema.index({ date: 1 });
 
 module.exports = mongoose.model("Menu", menuSchema);

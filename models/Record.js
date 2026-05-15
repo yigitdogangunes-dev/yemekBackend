@@ -46,4 +46,11 @@ const recordSchema = new mongoose.Schema({
   }
 }, { timestamps: true }); // Automatically records createdAt and updatedAt
 
+// Sık kullanılan sorgular için indeksler
+recordSchema.index({ user: 1, date: 1 });           // findOne({date,user}) + recommandations 7j
+recordSchema.index({ date: 1 });                    // admin: tüm gün siparişleri
+recordSchema.index({ isGuest: 1, guestName: 1, date: 1 }); // misafir sipariş upsert
+recordSchema.index({ messageId: 1 }, { sparse: true });    // edit -> deleteMany({messageId})
+recordSchema.index({ senderJid: 1 }, { sparse: true });    // /siparisim lookup
+
 module.exports = mongoose.model("Record", recordSchema);

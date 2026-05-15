@@ -10,6 +10,23 @@ const Menu = require("../models/Menu");
 const User = require("../models/User");
 const Record = require("../models/Record");
 const mongoose = require("mongoose");
+const { getTodayTRT, getDateOffsetTRT } = require("../utils/date");
+const { createTtlCache } = require("../utils/cache");
+
+// 60s TTL — yeni eklenen kullanıcı/yemek 1 dakika içinde bot tarafına yansır
+const getFoodsCached = createTtlCache(60_000);
+const getUsersCached = createTtlCache(60_000);
+
+// Rate-limit: göndericinin saniyede en fazla 1 mesajı işlenir.
+// Spam DoS koruması — Gemini quota + DB yükünü sınırlar.
+const RATE_LIMIT_WINDOW_MS = 1000;
+const lastMessageBySender = new Map();
+setInterval(() => {
+    const cutoff = Date.now() - 10 * 60 * 1000;
+    for (const [jid, ts] of lastMessageBySender) {
+        if (ts < cutoff) lastMessageBySender.delete(jid);
+    }
+}, 5 * 60 * 1000);
 
 let sock;
 let qrCode = null;
@@ -478,9 +495,19 @@ async function connectToWhatsApp() {
         const targetGroup = process.env.WHATSAPP_TARGET_GROUP;
 
         if (text && sender === targetGroup) {
+            // Rate-limit: aynı katılımcı saniyede 1 mesajdan fazlasını gönderirse atla
+            const senderKey = participant || sender;
+            const nowMs = Date.now();
+            const lastMs = lastMessageBySender.get(senderKey) || 0;
+            if (nowMs - lastMs < RATE_LIMIT_WINDOW_MS) {
+                console.log(`⏳ Rate-limit: ${senderKey} çok hızlı mesaj atıyor, atlanıyor.`);
+                return;
+            }
+            lastMessageBySender.set(senderKey, nowMs);
+
             console.log(`💬 Hedef Gruptan Mesaj Geldi: ${text}`);
 
-            const today = new Date().toISOString().split("T")[0];
+            const today = getTodayTRT();
 
             // Türkçe karakter uyumlu Baş Harf Büyütme (Tüm komutlar için)
             const toTitleCase = (str) => {
@@ -664,9 +691,7 @@ async function connectToWhatsApp() {
                     }
 
                     // 4. Son 7 günün siparişlerini çek ve frekans hesapla
-                    const sevenDaysAgo = new Date();
-                    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-                    const sevenDaysAgoStr = sevenDaysAgo.toISOString().split("T")[0];
+                    const sevenDaysAgoStr = getDateOffsetTRT(-7);
 
                     const pastRecords = await Record.find({
                         user: matchedUser._id,
@@ -926,10 +951,10 @@ Sadece JSON döndür.`;
             try {
                 console.log("🤖 Gemini mesajı analiz ediyor (Menü veya Sipariş?)...");
 
-                const existingFoods = await Food.find({}, "_id name category");
+                const existingFoods = await getFoodsCached(() => Food.find({}, "_id name category"));
                 const existingFoodNames = existingFoods.map(f => `{"id": "${f._id}", "name": "${f.name}"}`).join(", ");
 
-                const existingUsers = await User.find({});
+                const existingUsers = await getUsersCached(() => User.find({}));
                 const existingUserNames = existingUsers.map(u => u.lastName ? `${u.firstName} ${u.lastName}` : u.firstName).join(", ");
 
                 const todayMenu = await Menu.findOne({ date: today }).populate("soup mainCourse side cold dessert");
@@ -1192,7 +1217,7 @@ Sadece JSON döndür.`;
                         const coldIds = await findOrCreateFoods(coldList, "cold");
                         const dessertIds = await findOrCreateFoods(dessertList, "dessert");
 
-                        const today = new Date().toISOString().split("T")[0];
+                        const today = getTodayTRT();
 
                         await Menu.findOneAndUpdate(
                             { date: today },
@@ -1301,7 +1326,17 @@ Sadece JSON döndür.`;
                             for (let foodItem of (foods || [])) {
                                 let foodName = typeof foodItem === "string" ? foodItem : foodItem.name;
                                 let id = typeof foodItem === "object" ? foodItem.id : null;
-                                let portion = typeof foodItem === "object" && foodItem.portion ? Number(foodItem.portion) : 1;
+
+                                // Porsiyon değerini güvenli parse et: NaN, negatif, 0 → fallback 1
+                                let portion = 1;
+                                if (typeof foodItem === "object" && foodItem.portion != null) {
+                                    const parsed = Number(foodItem.portion);
+                                    if (Number.isFinite(parsed) && parsed > 0) {
+                                        portion = parsed;
+                                    } else {
+                                        console.log(`⚠️ Geçersiz porsiyon değeri (${foodItem.portion}) — varsayılan 1 kullanılacak.`);
+                                    }
+                                }
 
                                 if (!foodName) continue;
 
@@ -1420,17 +1455,18 @@ Sadece JSON döndür.`;
 
                                     // KRİTİK: Sadece menüde varsa veya içecekse sipariş listesine ekle
                                     if (actuallyInMenu || isDrink) {
+                                        const unitPrice = Number.isFinite(foodDoc.price) ? foodDoc.price : 0;
                                         orderItems.push({
                                             food: foodDoc._id,
                                             portion: portion,
-                                            price: foodDoc.price * portion
+                                            price: unitPrice * portion
                                         });
                                     }
                                 }
                             }
 
                             if (orderItems.length > 0) {
-                                const today = new Date().toISOString().split("T")[0];
+                                const today = getTodayTRT();
                                 console.log(`📅 Sipariş Kaydediliyor - Tarih: ${today}`);
 
                                 const query = isActuallyGuest

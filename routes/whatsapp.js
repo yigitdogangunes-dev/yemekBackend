@@ -1,6 +1,12 @@
 const express = require("express");
 const router = express.Router();
 const whatsappController = require("../controllers/whatsappController");
+const authMiddleware = require("../middleware/authMiddleware");
+const adminMiddleware = require("../middleware/adminMiddleware");
+
+// Le QR code expose le contrôle total du compte WhatsApp du bot.
+// Toutes les routes ici sont strictement admin-only.
+router.use(authMiddleware, adminMiddleware);
 
 router.get("/", (req, res) => {
     const qr = whatsappController.getQrCode();
