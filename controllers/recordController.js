@@ -44,10 +44,14 @@ exports.createRecord = async (req, res) => {
       return res.status(400).json({ message: "Tarih, kullanıcı ve yemek listesi zorunludur." });
     }
 
+    // Frontend'den gelen fiyatlar yerine sunucuda güncel paket fiyatlarını hesapla
+    const { calculateOrderPrices } = require("../services/pricingService");
+    const pricedItems = await calculateOrderPrices(items);
+
     // Aynı tarihte aynı user kayıt varsa güncelle, yoksa yeni oluştur
     const updatedRecord = await Record.findOneAndUpdate(
       { date, user }, // Arama kriteri
-      { items },        // Güncelleme verisi
+      { items: pricedItems }, // Güncelleme verisi
       { returnDocument: "after", upsert: true, runValidators: true }
     );
 

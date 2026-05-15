@@ -979,16 +979,20 @@ Görev:
                     }
 
                     // 7. ID'leri doğrula ve Record oluştur
-                    const orderItems = [];
+                    let initialItems = [];
                     const foodNames = [];
                     for (const item of recommendedItems) {
                         if (!item.id || !mongoose.Types.ObjectId.isValid(item.id)) continue;
                         const foodDoc = await Food.findById(item.id);
                         if (!foodDoc) continue;
-                        orderItems.push({ food: foodDoc._id, portion: item.portion || 1, price: foodDoc.price * (item.portion || 1) });
+                        initialItems.push({ food: foodDoc._id, portion: item.portion || 1 });
                         const emoji = { soup: "", mainCourse: "", side: "", cold: "", dessert: "", drink: "" }[foodDoc.category] || "";
                         foodNames.push(`${emoji} ${foodDoc.name}`);
                     }
+
+                    const { calculateOrderPrices } = require("../services/pricingService");
+                    const orderItems = await calculateOrderPrices(initialItems);
+
 
                     if (orderItems.length === 0) {
                         await sock.sendMessage(sender, { text: "⚠️ Sipariş için uygun yemek bulunamadı." }, { quoted: msg });
@@ -1086,7 +1090,6 @@ Sadece JSON döndür.`;
                                 if (matchIdx !== -1) {
                                     processedItems.push(record.items[matchIdx].food?.name);
                                     record.items.splice(matchIdx, 1);
-                                    await record.save();
                                     found = true;
                                     break;
                                 }
@@ -1102,8 +1105,7 @@ Sadece JSON döndür.`;
                                 if (foodDoc && (isOriginal || isFoodNameOriginal)) {
                                     const exists = record.items.some(i => i.food?._id.toString() === foodDoc._id.toString());
                                     if (!exists) {
-                                        record.items.push({ food: foodDoc._id, portion: 1, price: foodDoc.price });
-                                        await record.save();
+                                        record.items.push({ food: foodDoc._id, portion: 1 });
                                         processedItems.push(foodDoc.name);
                                         found = true;
                                         break;
@@ -1114,6 +1116,12 @@ Sadece JSON döndür.`;
                             }
                         }
                         if (!found) notFoundItems.push(itemName);
+                    }
+
+                    if (processedItems.length > 0) {
+                        const { calculateOrderPrices } = require("../services/pricingService");
+                        record.items = await calculateOrderPrices(record.items);
+                        await record.save();
                     }
 
                     let replyText = "";
@@ -1264,11 +1272,11 @@ Sadece JSON döndür.`;
                                         nameLower.includes(i.food?.name?.toLowerCase())
                                     );
                                     if (matchIdx !== -1) {
-                                        processedItems.push(record.items[matchIdx].food?.name);
-                                        record.items.splice(matchIdx, 1);
-                                        await record.save();
-                                        found = true;
-                                        break;
+                                    processedItems.push(record.items[matchIdx].food?.name);
+                                    record.items.splice(matchIdx, 1);
+                                    record.isModifiedByCommand = true;
+                                    found = true;
+                                    break;
                                     }
                                 } else if (parsedData.type === "ITEM_ARRIVED") {
                                     // Ana akışta da alıntı kontrolü yapalım
@@ -1284,8 +1292,8 @@ Sadece JSON döndür.`;
                                     if (foodDoc && (isOriginal || isFoodNameOriginal)) {
                                         const exists = record.items.some(i => i.food?._id.toString() === foodDoc._id.toString());
                                         if (!exists) {
-                                            record.items.push({ food: foodDoc._id, portion: 1, price: foodDoc.price });
-                                            await record.save();
+                                            record.items.push({ food: foodDoc._id, portion: 1 });
+                                            record.isModifiedByCommand = true;
                                             processedItems.push(foodDoc.name);
                                             found = true;
                                             break;
@@ -1296,6 +1304,14 @@ Sadece JSON döndür.`;
                                 }
                             }
                             if (!found) notFoundItems.push(itemName);
+                        }
+                        // Toplu kayıt
+                        for (const record of todayRecords) {
+                            if (record.isModifiedByCommand) {
+                                const { calculateOrderPrices } = require("../services/pricingService");
+                                record.items = await calculateOrderPrices(record.items);
+                                await record.save();
+                            }
                         }
 
                         let replyText = "";
@@ -1637,17 +1653,18 @@ Sadece JSON döndür.`;
 
                                     // KRİTİK: Sadece menüde varsa veya içecekse sipariş listesine ekle
                                     if (actuallyInMenu || isDrink) {
-                                        const unitPrice = Number.isFinite(foodDoc.price) ? foodDoc.price : 0;
                                         orderItems.push({
                                             food: foodDoc._id,
-                                            portion: portion,
-                                            price: unitPrice * portion
+                                            portion: portion
                                         });
                                     }
                                 }
                             }
 
                             if (orderItems.length > 0) {
+                                const { calculateOrderPrices } = require("../services/pricingService");
+                                const pricedItems = await calculateOrderPrices(orderItems);
+                                
                                 const today = getTodayTRT();
                                 console.log(`📅 Sipariş Kaydediliyor - Tarih: ${today}`);
 
@@ -1664,7 +1681,7 @@ Sadece JSON döndür.`;
                                         user: isActuallyGuest ? null : matchedUser._id,
                                         isGuest: isActuallyGuest,
                                         guestName: finalGuestName,
-                                        items: orderItems,
+                                        items: pricedItems,
                                         messageId: msg.key.id || null,
                                         senderJid: sender // Siparişi veren kişinin numarası
                                     },

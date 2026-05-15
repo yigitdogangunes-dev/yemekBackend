@@ -30,6 +30,7 @@ const foodsRoute = require("./routes/foods");
 const usersRoute = require("./routes/users");
 const authRoute = require("./routes/auth");
 const whatsappRoute = require("./routes/whatsapp");
+const pricingTiersRoute = require("./routes/pricingTiers");
 
 app.use("/records", recordsRoute);
 app.use("/menus", menusRoute);
@@ -37,6 +38,7 @@ app.use("/allFoods", foodsRoute);
 app.use("/users", usersRoute);
 app.use("/auth", authRoute); // Giriş (login) bilet gişesi
 app.use("/whatsapp", whatsappRoute);
+app.use("/pricing-tiers", pricingTiersRoute);
 // --------------------------------------
 
 // --- VERİTABANI BAĞLANTISI ---
