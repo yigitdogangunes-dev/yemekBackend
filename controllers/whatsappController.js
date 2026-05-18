@@ -1390,13 +1390,23 @@ Sadece JSON döndür.`;
 
                                 if (!food) {
                                     // Eğer veritabanında bu isimde yemek yoksa yenisini oluştur
+                                    const defaultPrices = {
+                                        soup: 45,
+                                        mainCourse: 100,
+                                        side: 80,
+                                        cold: 30,
+                                        dessert: 20,
+                                        drink: 30
+                                    };
+                                    const defaultPrice = defaultPrices[category] || 0;
+
                                     food = await Food.create({
                                         name: name,
                                         image: "/assets/placeholder.png",
-                                        price: 0,
+                                        price: defaultPrice,
                                         category: category
                                     });
-                                    console.log(`[Yeni Yemek Eklendi] -> ${name} (${category})`);
+                                    console.log(`[Yeni Yemek Eklendi] -> ${name} (${category}) - Fiyat: ${defaultPrice}₺`);
                                 }
                                 ids.push(food._id);
                             }
@@ -1614,10 +1624,10 @@ Sadece JSON döndür.`;
                                             foodDoc = await Food.create({
                                                 name: toTitleCase(cleanFoodName),
                                                 image: "/assets/placeholder.png",
-                                                price: 0,
+                                                price: 30,
                                                 category: "drink"
                                             });
-                                            console.log(`🥤 [Yeni İçecek Eklendi] -> ${foodDoc.name}`);
+                                            console.log(`🥤 [Yeni İçecek Eklendi] -> ${foodDoc.name} - Fiyat: 30₺`);
                                         }
                                     } else {
                                         console.log(`⚠️ Yemek tanınmıyor ve kaydedilmiyor: ${cleanFoodName}`);
