@@ -87,3 +87,90 @@ exports.deleteRecord = async (req, res) => {
     res.status(500).json({ message: "Silme işlemi başarısız.", error: error.message });
   }
 };
+
+// Analitik Verilerini Getir
+exports.getAnalytics = async (req, res) => {
+  try {
+    if (req.user.role !== "admin" && req.user.role !== "accountant") {
+      return res.status(403).json({ message: "Bu verilere erişim yetkiniz yok!" });
+    }
+
+    const filter = {};
+    if (req.query.month) {
+      // req.query.month is like "2026-06"
+      // Date in records is stored as string "YYYY-MM-DD"
+      filter.date = { $regex: `^${req.query.month}` };
+    }
+
+    // 1. Genel Toplamlar ve KPI'lar
+    const records = await Record.find(filter).populate("user", "firstName lastName").populate("items.food", "name");
+
+    let totalCost = 0;
+    let totalOrders = 0;
+    let activeUsersSet = new Set();
+    const spendingTrendMap = {};
+    const topFoodsMap = {};
+    const userSpendingMap = {};
+
+    records.forEach(record => {
+      let recordTotal = 0;
+      
+      const userName = record.isGuest 
+        ? (record.guestName || "Isimsiz") 
+        : (record.user ? `${record.user.firstName} ${record.user.lastName || ""}` : "Bilinmiyor");
+        
+      activeUsersSet.add(userName);
+
+      record.items.forEach(item => {
+        const itemCost = Number(item.price) * Number(item.portion);
+        recordTotal += itemCost;
+        totalOrders += Number(item.portion);
+
+        const foodName = item.food ? item.food.name : "Silinmiş Yemek";
+        if (!topFoodsMap[foodName]) topFoodsMap[foodName] = 0;
+        topFoodsMap[foodName] += Number(item.portion);
+      });
+
+      totalCost += recordTotal;
+
+      if (!spendingTrendMap[record.date]) spendingTrendMap[record.date] = 0;
+      spendingTrendMap[record.date] += recordTotal;
+
+      if (!userSpendingMap[userName]) userSpendingMap[userName] = 0;
+      userSpendingMap[userName] += recordTotal;
+    });
+
+    const avgOrderCost = totalOrders > 0 ? (totalCost / totalOrders).toFixed(2) : 0;
+    const activeUsersCount = activeUsersSet.size;
+
+    // Harcama Trendini diziye çevir ve tarihe göre sırala
+    const spendingTrend = Object.keys(spendingTrendMap)
+      .sort()
+      .map(date => ({ date, total: spendingTrendMap[date] }));
+
+    // En çok sipariş edilen yemekleri sırala (ilk 5)
+    const topFoods = Object.keys(topFoodsMap)
+      .map(name => ({ name, count: topFoodsMap[name] }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+
+    // Kişi bazlı harcamaları sırala
+    const userSpending = Object.keys(userSpendingMap)
+      .map(name => ({ name, total: userSpendingMap[name] }))
+      .sort((a, b) => b.total - a.total);
+
+    res.json({
+      totalCost,
+      avgOrderCost: Number(avgOrderCost),
+      totalOrders,
+      activeUsersCount,
+      spendingTrend,
+      topFoods,
+      userSpending
+    });
+
+  } catch (error) {
+    console.error("Analitik verisi hatası:", error);
+    res.status(500).json({ message: "Analitik verileri alınırken bir hata oluştu.", error: error.message });
+  }
+};

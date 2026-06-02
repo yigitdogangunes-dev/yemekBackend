@@ -22,8 +22,14 @@ module.exports = async (req, res, next) => {
       return res.status(403).json({ message: "Hesabınız pasif durumda veya bulunamadı. Lütfen yöneticiyle iletişime geçin." });
     }
 
-    // Doğrulanan kullanıcı bilgilerini sonraki işlemlere (req.user) aktarıyoruz
-    req.user = decoded;
+    // Token'daki veriler eski kalmış olabilir (örn. sonradan admin yapıldıysa).
+    // Bu yüzden güncel veritabanı verilerini kullanarak req.user'ı oluşturuyoruz.
+    req.user = {
+      id: user._id,
+      role: user.role,
+      status: user.status,
+      firstName: user.firstName
+    };
 
     // Güvenlikten geçti, yola devam edebilir
     next();
