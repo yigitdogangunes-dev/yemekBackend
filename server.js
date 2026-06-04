@@ -13,7 +13,7 @@ const app = express();
 
 // CORS Ayarları (Cookie taşıma izni = credentials: true)
 app.use(cors({
-  origin: ["http://localhost:3000", "http://127.0.0.1:3000"],
+  origin: ["http://localhost:3000", "http://127.0.0.1:3000", "https://yemek.malibaweb.com"],
   credentials: true
 }));
 
